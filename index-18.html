@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Зона доставки ресторана</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{
+  --ink:#1c2230; --ink-2:#4b5466; --ink-3:#7c8597;
+  --paper:#ffffff; --panel:#f6f7f9; --line:#dfe3ea;
+  --bag:#ffc21a; --bag-ink:#3a2a00; --focus:#3b73d9; --warn:#cf3434;
+}
+@media (prefers-color-scheme:dark){
+  :root{--ink:#eceef3;--ink-2:#b9c0cd;--ink-3:#8a93a4;--paper:#161a22;--panel:#1d222c;--line:#313847;--bag-ink:#2a1e00}
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font-family:"Golos Text",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--paper);font-size:15px;line-height:1.45}
+.app{display:grid;grid-template-columns:400px minmax(0,1fr);height:100%}
+aside{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:22px 22px 28px}
+#map{height:100%;background:#e8e8e4}
+h1{font-size:22px;line-height:1.2;margin:0 0 4px;font-weight:700;letter-spacing:-.01em}
+.lead{color:var(--ink-2);margin:0 0 20px;font-size:14px}
+fieldset{border:0;padding:0;margin:0 0 18px}
+legend,label.t{display:block;font-weight:600;font-size:14px;margin-bottom:7px}
+.hint{color:var(--ink-3);font-size:13px;margin-top:5px}
+.seg{display:flex;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+.seg button{flex:1;border:0;background:transparent;color:var(--ink);padding:8px 6px;border-radius:7px;font:inherit;font-size:14px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--paper);font-weight:600}
+input[type=text],input[type=number]{width:100%;font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--paper);color:var(--ink)}
+input:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.go{width:100%;border:0;background:var(--bag);color:var(--bag-ink);font:inherit;font-weight:700;font-size:16px;padding:13px;border-radius:11px;cursor:pointer}
+.go:hover{filter:brightness(.96)}
+.err{color:var(--warn);font-size:13px;margin-top:8px;min-height:1em}
+#result{margin-top:22px;border-top:1px solid var(--line);padding-top:18px}
+#result[hidden]{display:none}
+.sum{font-size:14px;color:var(--ink-2);margin:0 0 12px}
+.sum b{color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:14px;margin-bottom:14px}
+th{text-align:left;font-weight:500;color:var(--ink-3);font-size:12.5px;padding:0 0 6px}
+td{padding:5px 0;border-top:1px solid var(--line)}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:8px;vertical-align:-1px}
+.keys{display:grid;gap:5px;font-size:13px;color:var(--ink-2);margin-bottom:16px}
+.keys span.k{display:inline-block;width:14px;height:10px;margin-right:8px;border-radius:2px;vertical-align:0}
+.exp{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.exp button{font:inherit;font-size:14px;padding:9px;border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:9px;cursor:pointer}
+.exp button.wide{grid-column:1/-1}
+.foot{margin-top:22px;font-size:12.5px;color:var(--ink-3)}
+.pin{width:18px;height:18px;border-radius:50%;background:var(--bag);border:3px solid #1c2230;box-shadow:0 0 0 2px #fff}
+.leaflet-tooltip{font-family:inherit}
+@media (max-width:820px){
+  .app{grid-template-columns:1fr;grid-template-rows:auto 70vh;height:auto}
+  aside{border-right:0;border-bottom:1px solid var(--line)}
+  #map{height:70vh}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside>
+  <h1>Зона доставки ресторана</h1>
+  <p class="lead">Кольца по реальному времени курьеров от соседних ресторанов. Укажите точку и постройте зону.</p>
+
+  <fieldset>
+    <legend>Город</legend>
+    <div class="seg" id="cities" role="group" aria-label="Город"></div>
+  </fieldset>
+
+  <fieldset>
+    <label class="t" for="coords">Где ресторан</label>
+    <input type="text" id="coords" placeholder="Координаты, например 43.2446, 76.9173" autocomplete="off">
+    <input type="text" id="rest" list="restList" placeholder="или найдите ресторан из списка" autocomplete="off" style="margin-top:8px">
+    <datalist id="restList"></datalist>
+    <div class="hint">Можно просто кликнуть по карте.</div>
+  </fieldset>
+
+  <fieldset>
+    <label class="t" for="brand">Бренд</label>
+    <input type="text" id="brand" placeholder="Например Basilic" autocomplete="off">
+    <div class="hint">Зона не зайдёт на территорию других филиалов этого бренда.</div>
+  </fieldset>
+
+  <fieldset class="row2">
+    <div><label class="t" for="maxKm">Радиус, км</label><input type="number" id="maxKm" value="4" min="1" max="6" step="0.5"></div>
+    <div><label class="t" for="limit">Порог, мин</label><input type="number" id="limit" value="25" min="10" max="45" step="1"></div>
+  </fieldset>
+
+  <button class="go" id="go">Построить зону</button>
+  <div class="err" id="err" role="alert"></div>
+
+  <section id="result" hidden aria-live="polite">
+    <p class="sum" id="sum"></p>
+    <table>
+      <thead><tr><th>Кольцо</th><th class="n">Среднее, мин</th><th class="n">В зоне</th></tr></thead>
+      <tbody id="rings"></tbody>
+    </table>
+    <div class="keys" id="keys"></div>
+    <div class="exp">
+      <button id="csv">Скачать CSV</button>
+      <button id="geo">Скачать GeoJSON</button>
+      <button id="copy" class="wide">Скопировать ID ячеек зоны</button>
+    </div>
+  </section>
+
+  <p class="foot" id="foot"></p>
+</aside>
+<div id="map" role="region" aria-label="Карта зоны доставки"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
+<script src="data.js"></script>
+<script src="zones.js"></script>
+<script>
+const D = window.ZONE_DATA, B = Zones.BANDS;
+const $ = id => document.getElementById(id);
+let cityKey = 'almaty', last = null, layer = null, pin = null;
+
+const map = L.map('map', { zoomControl: true });
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
+
+const STATUS = {
+  slow: { label: 'Дольше порога, в зону не входит', fill: '#cf3434', op: .18, stroke: '#cf3434', dash: null },
+  branch: { label: 'Территория другого филиала', fill: '#8a94a6', op: .22, stroke: '#6c7689', dash: '4 3' },
+  barrier: { label: 'За стоп-линией', fill: '#8a94a6', op: .14, stroke: '#8a94a6', dash: '2 3' },
+  empty: { label: 'Заказов рядом не было', fill: '#b9bec8', op: .10, stroke: '#b9bec8', dash: '2 3' },
+  island: { label: 'Оторвано от основной зоны', fill: '#b9bec8', op: .10, stroke: '#b9bec8', dash: '2 3' },
+};
+
+function renderCities() {
+  $('cities').innerHTML = '';
+  for (const [k, c] of Object.entries(D.cities)) {
+    const b = document.createElement('button');
+    b.textContent = c.name; b.setAttribute('aria-pressed', k === cityKey);
+    b.onclick = () => setCity(k, true);
+    $('cities').appendChild(b);
+  }
+}
+function setCity(k, move) {
+  cityKey = k; renderCities();
+  const c = D.cities[k];
+  $('restList').innerHTML = c.rest.map(r => `<option value="${r[0].replace(/"/g, '&quot;')}">`).join('');
+  $('foot').textContent = `Данные: доставки ${c.name} за ${c.period}, ${c.orders.toLocaleString('ru-RU')} заказов. Обновлено ${D.updated.split('-').reverse().join('.')}.`;
+  if (move) { map.setView(c.center, c.zoom); clearZone(); }
+}
+function clearZone() { if (layer) map.removeLayer(layer); layer = null; $('result').hidden = true; }
+
+function parseCoords(s) {
+  const m = s.replace(/[;]/g, ',').match(/(-?\d+(?:[.,]\d+)?)[\s,]+(-?\d+(?:[.,]\d+)?)/);
+  if (!m) return null;
+  const a = parseFloat(m[1].replace(',', '.')), b = parseFloat(m[2].replace(',', '.'));
+  return (Math.abs(a) <= 90 && Math.abs(b) <= 180) ? [a, b] : null;
+}
+function nearestCity(p) {
+  let best = null, bd = Infinity;
+  for (const [k, c] of Object.entries(D.cities)) {
+    const d = Math.hypot(c.center[0] - p[0], c.center[1] - p[1]);
+    if (d < bd) { bd = d; best = k; }
+  }
+  return bd < 0.5 ? best : null;
+}
+
+$('rest').addEventListener('change', () => {
+  const r = D.cities[cityKey].rest.find(x => x[0] === $('rest').value);
+  if (!r) return;
+  $('coords').value = `${r[1]}, ${r[2]}`;
+  $('brand').value = r[0].split(/\s+/)[0];
+  run();
+});
+['coords', 'brand', 'maxKm', 'limit'].forEach(id => $(id).addEventListener('input', () => $('err').textContent = ''));
+$('coords').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+$('go').onclick = run;
+map.on('click', e => { $('coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; run(); });
+
+function run() {
+  const p = parseCoords($('coords').value);
+  if (!p) { $('err').textContent = 'Введите координаты в виде «широта, долгота» или кликните по карте.'; return; }
+  const ck = nearestCity(p);
+  if (!ck) { $('err').textContent = 'Точка далеко от городов, по которым есть данные: ' + Object.values(D.cities).map(c => c.name).join(', ') + '.'; return; }
+  if (ck !== cityKey) setCity(ck, false);
+  const maxKm = Math.min(6, Math.max(1, +$('maxKm').value || 4));
+  const limit = Math.min(45, Math.max(10, +$('limit').value || 25));
+  last = Zones.build(D.cities[cityKey], { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit });
+  draw(last);
+  location.hash = new URLSearchParams({ lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit }).toString();
+}
+
+function draw(z) {
+  if (layer) map.removeLayer(layer);
+  layer = L.layerGroup().addTo(map);
+  const c = D.cities[cityKey];
+  for (const x of z.hexes) {
+    const ring = z.rings[x.r], bd = x.h ? h3.cellToBoundary(x.h) : null;
+    let style;
+    if (x.status === 'ok') { const col = B[ring.band].color; style = { color: col, weight: 1, fillColor: col, fillOpacity: .42 }; }
+    else { const s = STATUS[x.status]; style = { color: s.stroke, weight: 1, fillColor: s.fill, fillOpacity: s.op, dashArray: s.dash }; }
+    L.polygon(bd, style).bindTooltip(`${ring.from}–${ring.to} км · ~${Math.round(x.est)} мин` + (x.why ? `<br>${x.why}` : '')).addTo(layer);
+  }
+  for (const poly of z.outline) L.polygon(poly.map(r => r.map(([lng, lat]) => [lat, lng])), { color: '#1c2230', weight: 3, fill: false }).addTo(layer);
+  for (const b of c.barriers) L.polyline(b.line.map(([lng, lat]) => [lat, lng]), { color: '#cf3434', weight: 3, dashArray: '8 6' }).bindTooltip(b.note, { sticky: true }).addTo(layer);
+  for (const b of z.branches) L.circleMarker([b[1], b[2]], { radius: 7, color: '#fff', weight: 2, fillColor: '#6c7689', fillOpacity: 1 }).bindTooltip(b[0]).addTo(layer);
+  L.marker(z.point, { icon: L.divIcon({ className: '', html: '<div class="pin"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(layer);
+  map.fitBounds(L.featureGroup(layer.getLayers()).getBounds(), { padding: [24, 24] });
+
+  const inZone = z.counts.ok || 0;
+  $('sum').innerHTML = `В зоне <b>${inZone}</b> ячеек из ${z.hexes.length} в радиусе ${z.maxKm} км. Время посчитано по <b>${z.neighborOrders.toLocaleString('ru-RU')}</b> доставкам соседних ресторанов.`;
+  $('rings').innerHTML = z.rings.map(r => `<tr><td><span class="sw" style="background:${B[r.band].color}"></span>${r.from}–${r.to} км${r.src !== 'рядом' ? ' *' : ''}</td><td class="n">${r.avg.toFixed(1)}</td><td class="n">${r.cells} из ${r.total}</td></tr>`).join('') +
+    (z.rings.some(r => r.src !== 'рядом') ? `<tr><td colspan="3" class="hint" style="border:0">* рядом мало данных, взято по более широкому району</td></tr>` : '');
+  $('keys').innerHTML = Object.entries(STATUS).filter(([k]) => z.counts[k]).map(([k, s]) =>
+    `<div><span class="k" style="background:${s.fill};opacity:.8;border:1px ${s.dash ? 'dashed' : 'solid'} ${s.stroke}"></span>${s.label}: ${z.counts[k]}</div>`).join('') +
+    `<div><span class="k" style="border:2px solid #1c2230"></span>Чёрный контур — граница зоны</div>`;
+  $('result').hidden = false;
+}
+
+function fileName(ext) { const p = last.point; return `zona_${D.cities[cityKey].name}_${p[0].toFixed(4)}_${p[1].toFixed(4)}.${ext}`; }
+function save(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const statusRu = { ok: 'в зоне', slow: 'дольше порога', branch: 'другой филиал', barrier: 'за стоп-линией', empty: 'нет заказов', island: 'оторвано' };
+$('csv').onclick = () => {
+  if (!last) return;
+  const rows = [['h3_index_res9', 'кольцо_км', 'среднее_кольца_мин', 'оценка_ячейки_мин', 'цвет', 'статус']];
+  for (const x of last.hexes) { const r = last.rings[x.r]; rows.push([x.h, `${r.from}-${r.to}`, r.avg.toFixed(1), Math.round(x.est), B[r.band].name, statusRu[x.status]]); }
+  save(fileName('csv'), '\ufeff' + rows.map(r => r.join(';')).join('\n'), 'text/csv');
+};
+$('geo').onclick = () => {
+  if (!last) return;
+  const feats = last.hexes.filter(x => x.status === 'ok').map(x => {
+    const r = last.rings[x.r], b = h3.cellToBoundary(x.h, true);
+    return { type: 'Feature', properties: { h3: x.h, ring_km: `${r.from}-${r.to}`, avg_min: +r.avg.toFixed(1), color: B[r.band].color }, geometry: { type: 'Polygon', coordinates: [b] } };
+  });
+  for (const poly of last.outline) feats.push({ type: 'Feature', properties: { kind: 'zone_outline' }, geometry: { type: 'Polygon', coordinates: poly } });
+  save(fileName('geojson'), JSON.stringify({ type: 'FeatureCollection', features: feats }), 'application/geo+json');
+};
+$('copy').onclick = async () => {
+  if (!last) return;
+  const ids = last.hexes.filter(x => x.status === 'ok').map(x => x.h).join('\n');
+  try { await navigator.clipboard.writeText(ids); $('copy').textContent = 'ID скопированы'; }
+  catch { $('copy').textContent = 'Не удалось скопировать'; }
+  setTimeout(() => $('copy').textContent = 'Скопировать ID ячеек зоны', 2000);
+};
+
+renderCities(); setCity(cityKey, true);
+const q = new URLSearchParams(location.hash.slice(1));
+if (q.get('lat')) {
+  $('coords').value = `${q.get('lat')}, ${q.get('lng')}`; $('brand').value = q.get('brand') || '';
+  if (q.get('km')) $('maxKm').value = q.get('km'); if (q.get('min')) $('limit').value = q.get('min');
+  run();
+}
+</script>
+</body>
+</html>
