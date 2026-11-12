@@ -30,7 +30,7 @@ legend,label.t{display:block;font-weight:600;font-size:14px;margin-bottom:7px}
 .seg{display:flex;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
 .seg button{flex:1;border:0;background:transparent;color:var(--ink);padding:8px 6px;border-radius:7px;font:inherit;font-size:14px;cursor:pointer}
 .seg button[aria-pressed="true"]{background:var(--ink);color:var(--paper);font-weight:600}
-input[type=text],input[type=number]{width:100%;font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--paper);color:var(--ink)}
+input[type=text],input[type=number],textarea{width:100%;resize:vertical;font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--paper);color:var(--ink)}
 input:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .go{width:100%;border:0;background:var(--bag);color:var(--bag-ink);font:inherit;font-weight:700;font-size:16px;padding:13px;border-radius:11px;cursor:pointer}
@@ -84,6 +84,9 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
     <label class="t" for="brand">Бренд</label>
     <input type="text" id="brand" placeholder="Например Basilic" autocomplete="off">
     <div class="hint">Зона не зайдёт на территорию других филиалов этого бренда.</div>
+    <label class="t" for="extra" style="margin-top:12px">Новые филиалы</label>
+    <textarea id="extra" rows="3" placeholder="Координаты филиалов, которых ещё нет в списке, по одному на строку&#10;43.2542, 76.9363"></textarea>
+    <div class="hint">Зона поделится с ними так же, как с филиалами из списка.</div>
   </fieldset>
 
   <fieldset class="row2">
@@ -173,7 +176,7 @@ $('rest').addEventListener('change', () => {
   $('brand').value = r[0].split(/\s+/)[0];
   run();
 });
-['coords', 'brand', 'maxKm', 'limit'].forEach(id => $(id).addEventListener('input', () => $('err').textContent = ''));
+['coords', 'brand', 'extra', 'maxKm', 'limit'].forEach(id => $(id).addEventListener('input', () => $('err').textContent = ''));
 $('coords').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
 $('go').onclick = run;
 map.on('click', e => { $('coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; run(); });
@@ -186,9 +189,16 @@ function run() {
   if (ck !== cityKey) setCity(ck, false);
   const maxKm = Math.min(6, Math.max(1, +$('maxKm').value || 4));
   const limit = Math.min(45, Math.max(10, +$('limit').value || 25));
-  last = Zones.build(D.cities[cityKey], { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit });
+  const extra = [];
+  for (const [i, line] of $('extra').value.split('\n').entries()) {
+    if (!line.trim()) continue;
+    const q = parseCoords(line);
+    if (!q) { $('err').textContent = `Не получилось прочитать координаты филиала в строке ${i + 1}: «${line.trim()}».`; return; }
+    extra.push(['Новый филиал ' + (extra.length + 1), q[0], q[1]]);
+  }
+  last = Zones.build(D.cities[cityKey], { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit, extraBranches: extra });
   draw(last);
-  location.hash = new URLSearchParams({ lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit }).toString();
+  location.hash = new URLSearchParams({ lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
 }
 
 function draw(z) {
@@ -253,6 +263,7 @@ const q = new URLSearchParams(location.hash.slice(1));
 if (q.get('lat')) {
   $('coords').value = `${q.get('lat')}, ${q.get('lng')}`; $('brand').value = q.get('brand') || '';
   if (q.get('km')) $('maxKm').value = q.get('km'); if (q.get('min')) $('limit').value = q.get('min');
+  if (q.get('extra')) $('extra').value = q.get('extra').split(';').map(s => s.replace(',', ', ')).join('\n');
   run();
 }
 </script>
