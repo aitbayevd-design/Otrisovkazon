@@ -80,9 +80,9 @@
     const maxKm = opts.maxKm || 4, limit = opts.limit || 25;
     const prof = profile(city, p, maxKm);
     const brand = (opts.brand || '').trim().toLowerCase();
-    const branches = brand
+    const branches = (brand
       ? city.rest.filter(r => r[0].toLowerCase().startsWith(brand) && km(p, [r[1], r[2]]) > 0.15)
-      : [];
+      : []).concat((opts.extraBranches || []).filter(b => km(p, [b[1], b[2]]) > 0.15));
     const origin = H3.latLngToCell(p[0], p[1], RES);
     const k = Math.ceil(maxKm / 0.33) + 1;
     const hexes = [];
