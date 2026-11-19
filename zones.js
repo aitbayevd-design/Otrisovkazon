@@ -139,7 +139,72 @@
     return rows;
   }
 
-  const api = { build, byHour, BANDS, bandOf, RES };
+  // ---------- Экономика (фуд): CM2 без флэта на заказ по км пути ----------
+  const DETOUR = 1.3;   // путь по дороге ≈ расстояние по прямой × 1,3
+  const norm = s => (s || '').toLowerCase().replace(/[^a-zа-яё0-9]+/gi, ' ').trim();
+  const isQasyq = s => norm(s).startsWith('qasyq');
+
+  function ecoRestCoords(city) {
+    if (city._ecoIdx) return city._ecoIdx;
+    const byName = {};
+    for (const r of city.rest) byName[norm(r[0])] = [r[1], r[2]];
+    const out = [];
+    for (const [name, e] of Object.entries((city.eco || {}).rest || {})) out.push({ name, e, p: byName[norm(name)] || null });
+    city._ecoIdx = out;
+    return out;
+  }
+
+  function aggBands(list) {
+    const acc = Array.from({ length: 8 }, () => [0, 0]);
+    for (const x of list) for (const [k, [n, nf]] of Object.entries(x.e.b)) { acc[k][0] += n; acc[k][1] += n * nf; }
+    return acc;
+  }
+
+  // own: данные самого ресторана (если он есть в экономике); profile: соседи того же типа
+  function economy(city, opts, rings) {
+    if (!city.eco) return null;
+    const p = [opts.lat, opts.lng];
+    const idx = ecoRestCoords(city);
+    const wantQ = isQasyq(opts.brand) || isQasyq(opts.restName);
+    // свой ресторан: по имени из списка или по координатам (≤150 м) с тем же брендом
+    let own = null;
+    if (opts.restName) own = idx.find(x => norm(x.name) === norm(opts.restName)) || null;
+    if (!own) own = idx.find(x => x.p && km(p, x.p) <= 0.15 && (!opts.brand || norm(x.name).startsWith(norm(opts.brand)))) || null;
+    const pool = idx.filter(x => isQasyq(x.name) === wantQ && x !== own);
+    let near = pool.filter(x => x.p && km(p, x.p) <= 3);
+    let src = 'соседи в радиусе 3 км';
+    if (near.reduce((s, x) => s + x.e.n, 0) < 200) { near = pool; src = 'весь город'; }
+    const prof = aggBands(near);
+    const cityBand = aggBands(pool);
+    const ownB = own ? own.e.b : null;
+    const out = rings.map(r => {
+      const mid = (r.from + r.to) / 2, k = Math.min(7, Math.floor(mid * DETOUR));
+      let v = null, from = '';
+      if (ownB && ownB[k] && ownB[k][0] >= 5) { v = ownB[k][1]; from = 'свои'; }
+      else if (prof[k][0] >= 10) { v = prof[k][1] / prof[k][0]; from = own ? 'соседи' : ''; }
+      else if (cityBand[k][0] >= 10) { v = cityBand[k][1] / cityBand[k][0]; from = 'город'; }
+      return { r: r.r, roadKm: k, margin: v, src: from };
+    });
+    // рекомендация: с какого кольца начинается устойчивый минус (все дальше тоже минус)
+    const vals = out.map(x => x.margin);
+    let cut = null;
+    for (let i = 0; i < vals.length; i++) {
+      if (vals[i] != null && vals[i] < 0 && vals.slice(i).every(v => v == null || v < 0)) { cut = i; break; }
+    }
+    let verdict;
+    if (cut === 0) verdict = 'all';
+    else if (cut != null) verdict = 'cut';
+    else if (vals.some(v => v != null && v < 0)) verdict = 'mixed';
+    else verdict = 'ok';
+    return { own: own ? Object.assign({ name: own.name }, own.e) : null, rings: out, cut, verdict, src, qasyq: wantQ, period: city.eco.period };
+  }
+
+  function lossList(city, top) {
+    if (!city.eco) return [];
+    return ecoRestCoords(city).filter(x => x.e.loss < 0).sort((a, b) => a.e.loss - b.e.loss).slice(0, top || 10);
+  }
+
+  const api = { build, byHour, economy, lossList, BANDS, bandOf, RES, DETOUR };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Zones = api;
 })(this);
