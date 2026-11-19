@@ -75,6 +75,15 @@
     return { n, adj: n ? sr / (n + 8) : 0 };
   }
 
+  function segX(a, b, c, d) { // пересекаются ли отрезки ab и cd (в координатах lat/lng)
+    const o = (p, q, r) => Math.sign((q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1]));
+    return o(a, b, c) !== o(a, b, d) && o(c, d, a) !== o(c, d, b);
+  }
+  function crossesLine(p, c, pts) {
+    for (let i = 0; i < pts.length - 1; i++) if (segX(p, c, pts[i], pts[i + 1])) return true;
+    return false;
+  }
+
   function build(city, opts) {
     const p = [opts.lat, opts.lng];
     const maxKm = opts.maxKm || 4, limit = opts.limit || 25;
@@ -104,6 +113,7 @@
         const below = c[0] < lineLat(b.line, c[1]);
         return (b.side === 'south' ? below : !below) && d > b.allow_km;
       })) { status = 'barrier'; why = city.barriers.map(b => b.note).join('; '); }
+      else if ((opts.customLines || []).some(l => d > (l.allowKm || 0) && crossesLine(p, c, l.pts))) { status = 'barrier'; why = 'за стоп-линией, нарисованной вручную'; }
       else if (loc.n === 0) { status = 'empty'; why = 'заказов рядом не было'; }
       else if (est > limit) { status = 'slow'; why = 'здесь доставка дольше: ~' + Math.round(est) + ' мин'; }
       hexes.push({ h, r, d, est, status, why, nearby: loc.n });
@@ -117,6 +127,12 @@
       for (const n of H3.gridDisk(h, 1)) if (okSet.has(n) && !seen.has(n)) { seen.add(n); stack.push(n); }
     }
     for (const x of hexes) if (x.status === 'ok' && !seen.has(x.h)) { x.status = 'island'; x.why = 'оторвано от основной зоны'; }
+    // ручные правки поверх расчёта
+    const man = opts.manual || {};
+    for (const x of hexes) {
+      if (man.remove && man.remove.has(x.h) && x.status === 'ok') { x.status = 'manual'; x.why = 'убрано вручную'; }
+      else if (man.add && man.add.has(x.h) && x.status !== 'ok') { x.was = x.status; x.status = 'ok'; x.added = true; x.why = 'добавлено вручную'; }
+    }
     const inZone = hexes.filter(x => x.status === 'ok');
     const outline = inZone.length ? H3.cellsToMultiPolygon(inZone.map(x => x.h), true) : [];
     for (const ring of prof.rings) {
