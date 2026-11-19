@@ -163,9 +163,22 @@ h2{font-size:15px;margin:18px 0 2px}
 
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/h3-js@4.1.0/dist/h3-js.umd.js"></script>
-<script src="data.js"></script>
-<script src="zones.js"></script>
+<script src="data.js?v=20261119"></script>
+<script src="zones.js?v=20261119"></script>
 <script>
+window.addEventListener('error', e => {
+  const el = document.getElementById('err');
+  if (el) el.textContent = 'Ошибка на странице: ' + (e.message || 'неизвестная') + '. Проверьте, что загружены все три файла (index.html, zones.js, data.js) последней версии, и обновите страницу с Cmd+Shift+R.';
+});
+if (!window.ZONE_DATA || !window.Zones || !window.h3 || !window.L) {
+  document.addEventListener('DOMContentLoaded', () => {});
+  const miss = [!window.L && 'Leaflet (карта)', !window.h3 && 'h3-js', !window.ZONE_DATA && 'data.js', !window.Zones && 'zones.js'].filter(Boolean).join(', ');
+  document.getElementById('err').textContent = 'Не загрузилось: ' + miss + '. Проверьте файлы в репозитории и интернет, затем обновите страницу.';
+  throw new Error('missing deps: ' + miss);
+}
+if (!Zones.economy || !Zones.byHour) {
+  document.getElementById('err').textContent = 'Файл zones.js в репозитории старой версии. Загрузите новый zones.js (и data.js) и обновите страницу с Cmd+Shift+R.';
+}
 const D = window.ZONE_DATA, B = Zones.BANDS;
 const $ = id => document.getElementById(id);
 let cityKey = 'almaty', last = null, layer = null, pin = null, hour = null, hourRows = null, eco = null, ecoLayer = false, restName = '';
@@ -260,8 +273,8 @@ function run(keepHours) {
   }
   const opts = { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit, extraBranches: extra };
   last = Zones.build(D.cities[cityKey], Object.assign({ hour }, opts));
-  if (!keepHours || !hourRows) hourRows = Zones.byHour(D.cities[cityKey], opts, D.hourOrder);
-  eco = Zones.economy(D.cities[cityKey], Object.assign({ restName }, opts), last.rings);
+  if (Zones.byHour && D.hourOrder && (!keepHours || !hourRows)) hourRows = Zones.byHour(D.cities[cityKey], opts, D.hourOrder);
+  eco = Zones.economy ? Zones.economy(D.cities[cityKey], Object.assign({ restName }, opts), last.rings) : null;
   draw(last);
   location.hash = new URLSearchParams({ lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, h: hour == null ? '' : hour, r: restName, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
 }
@@ -326,7 +339,7 @@ function renderEco(z) {
   const b = $('applyCut'); if (b) b.onclick = () => { $('maxKm').value = r0.from; run(); };
 }
 function renderLosses() {
-  const c = D.cities[cityKey], list = Zones.lossList(c, 10);
+  const c = D.cities[cityKey], list = Zones.lossList ? Zones.lossList(c, 10) : [];
   $('losses').hidden = !list.length;
   if (!list.length) return;
   $('lossHint').textContent = `Сумма минусовых заказов за ${c.eco.period}, CM2 без флэта. Нажмите на ресторан, чтобы открыть его зону.`;
