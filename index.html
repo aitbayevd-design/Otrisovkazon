@@ -27,8 +27,8 @@ h1{font-size:22px;line-height:1.2;margin:0 0 4px;font-weight:700;letter-spacing:
 fieldset{border:0;padding:0;margin:0 0 18px}
 legend,label.t{display:block;font-weight:600;font-size:14px;margin-bottom:7px}
 .hint{color:var(--ink-3);font-size:13px;margin-top:5px}
-.seg{display:flex;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
-.seg button{flex:1;border:0;background:transparent;color:var(--ink);padding:8px 6px;border-radius:7px;font:inherit;font-size:14px;cursor:pointer}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+.seg button{border:0;background:transparent;color:var(--ink);padding:8px 6px;border-radius:7px;font:inherit;font-size:14px;cursor:pointer}
 .seg button[aria-pressed="true"]{background:var(--ink);color:var(--paper);font-weight:600}
 input[type=text],input[type=number],textarea{width:100%;resize:vertical;font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--paper);color:var(--ink)}
 input:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
