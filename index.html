@@ -63,6 +63,19 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .mx td.c{color:#fff;font-weight:600;min-width:26px}
 .mx tr.cells td{color:var(--ink-2);border-top:1px solid var(--line)}
 h2{font-size:15px;margin:18px 0 2px}
+.eco{border:1px solid var(--line);border-radius:10px;padding:12px 13px;margin:10px 0 14px;background:var(--paper);font-size:14px}
+.eco.bad{border-color:#e7b0b0;background:color-mix(in srgb,#cf3434 7%,var(--paper))}
+.eco.warn{border-color:#ecd08a;background:color-mix(in srgb,#e6a100 8%,var(--paper))}
+.eco.good{border-color:#a9d9bf;background:color-mix(in srgb,#0f8a5f 7%,var(--paper))}
+.eco b.t{display:block;margin-bottom:4px}
+.eco .apply{margin-top:9px;font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--ink);background:var(--ink);color:var(--paper);border-radius:8px;cursor:pointer}
+.pos{color:#0f8a5f}.neg{color:#cf3434}
+.loss{width:100%;font-size:13px}
+.loss td{cursor:pointer}
+.loss tr:hover td{background:var(--panel)}
+.layer{display:flex;gap:6px;margin:4px 0 10px}
+.layer button{flex:1;font:inherit;font-size:13px;padding:7px;border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:8px;cursor:pointer}
+.layer button[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink);font-weight:600}
 .foot{margin-top:22px;font-size:12.5px;color:var(--ink-3)}
 .pin{width:18px;height:18px;border-radius:50%;background:var(--bag);border:3px solid #1c2230;box-shadow:0 0 0 2px #fff}
 .leaflet-tooltip{font-family:inherit}
@@ -119,8 +132,10 @@ h2{font-size:15px;margin:18px 0 2px}
 
   <section id="result" hidden aria-live="polite">
     <p class="sum" id="sum"></p>
+    <div class="layer" role="group" aria-label="Слой карты"><button id="lyTime" aria-pressed="true">Слой: время</button><button id="lyEco" aria-pressed="false">Слой: экономика</button></div>
+    <div id="eco"></div>
     <table>
-      <thead><tr><th>Кольцо</th><th class="n">Среднее, мин</th><th class="n">В зоне</th></tr></thead>
+      <thead><tr><th>Кольцо</th><th class="n">Время, мин</th><th class="n">Маржа, ₸</th><th class="n">В зоне</th></tr></thead>
       <tbody id="rings"></tbody>
     </table>
     <div class="keys" id="keys"></div>
@@ -135,6 +150,12 @@ h2{font-size:15px;margin:18px 0 2px}
     </div>
   </section>
 
+  <section id="losses" hidden>
+    <h2>Минусовые рестораны · фуд</h2>
+    <p class="hint" style="margin:0 0 6px" id="lossHint"></p>
+    <table class="loss"><thead><tr><th>Ресторан</th><th class="n">Убыток, тыс ₸</th><th class="n">В минусе</th></tr></thead><tbody id="lossBody"></tbody></table>
+  </section>
+
   <p class="foot" id="foot"></p>
 </aside>
 <div id="map" role="region" aria-label="Карта зоны доставки"></div>
@@ -147,7 +168,7 @@ h2{font-size:15px;margin:18px 0 2px}
 <script>
 const D = window.ZONE_DATA, B = Zones.BANDS;
 const $ = id => document.getElementById(id);
-let cityKey = 'almaty', last = null, layer = null, pin = null, hour = null, hourRows = null;
+let cityKey = 'almaty', last = null, layer = null, pin = null, hour = null, hourRows = null, eco = null, ecoLayer = false, restName = '';
 
 const map = L.map('map', { zoomControl: true });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
@@ -174,6 +195,7 @@ function setCity(k, move) {
   const c = D.cities[k];
   $('restList').innerHTML = c.rest.map(r => `<option value="${r[0].replace(/"/g, '&quot;')}">`).join('');
   $('foot').textContent = `Данные: доставки ${c.name} за ${c.period}, ${c.orders.toLocaleString('ru-RU')} заказов. Обновлено ${D.updated.split('-').reverse().join('.')}.`;
+  renderLosses();
   if (move) { map.setView(c.center, c.zoom); clearZone(); }
 }
 const HL = h => String(h).padStart(2, '0') + ':00';
@@ -212,12 +234,14 @@ $('rest').addEventListener('change', () => {
   if (!r) return;
   $('coords').value = `${r[1]}, ${r[2]}`;
   $('brand').value = r[0].split(/\s+/)[0];
+  restName = r[0];
   run();
 });
 ['coords', 'brand', 'extra', 'maxKm', 'limit'].forEach(id => $(id).addEventListener('input', () => $('err').textContent = ''));
 $('coords').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
 $('go').onclick = () => run();
-map.on('click', e => { $('coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; run(); });
+$('coords').addEventListener('input', () => { restName = ''; });
+map.on('click', e => { restName = ''; $('coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; run(); });
 
 function run(keepHours) {
   const p = parseCoords($('coords').value);
@@ -237,8 +261,9 @@ function run(keepHours) {
   const opts = { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit, extraBranches: extra };
   last = Zones.build(D.cities[cityKey], Object.assign({ hour }, opts));
   if (!keepHours || !hourRows) hourRows = Zones.byHour(D.cities[cityKey], opts, D.hourOrder);
+  eco = Zones.economy(D.cities[cityKey], Object.assign({ restName }, opts), last.rings);
   draw(last);
-  location.hash = new URLSearchParams({ lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, h: hour == null ? '' : hour, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
+  location.hash = new URLSearchParams({ lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, h: hour == null ? '' : hour, r: restName, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
 }
 
 function draw(z) {
@@ -248,9 +273,11 @@ function draw(z) {
   for (const x of z.hexes) {
     const ring = z.rings[x.r], bd = x.h ? h3.cellToBoundary(x.h) : null;
     let style;
-    if (x.status === 'ok') { const col = B[ring.band].color; style = { color: col, weight: 1, fillColor: col, fillOpacity: .42 }; }
+    if (x.status === 'ok' && ecoLayer && eco) { const m = eco.rings[x.r].margin; const col = ecoColor(m); style = { color: col, weight: 1, fillColor: col, fillOpacity: .5 }; }
+    else if (x.status === 'ok') { const col = B[ring.band].color; style = { color: col, weight: 1, fillColor: col, fillOpacity: .42 }; }
     else { const s = STATUS[x.status]; style = { color: s.stroke, weight: 1, fillColor: s.fill, fillOpacity: s.op, dashArray: s.dash }; }
-    L.polygon(bd, style).bindTooltip(`${ring.from}–${ring.to} км · ~${Math.round(x.est)} мин` + (x.why ? `<br>${x.why}` : '')).addTo(layer);
+    const em = eco && eco.rings[x.r].margin != null ? `<br>маржа ~${fmt(eco.rings[x.r].margin)} ₸ на заказ` : '';
+    L.polygon(bd, style).bindTooltip(`${ring.from}–${ring.to} км · ~${Math.round(x.est)} мин` + em + (x.why ? `<br>${x.why}` : '')).addTo(layer);
   }
   for (const poly of z.outline) L.polygon(poly.map(r => r.map(([lng, lat]) => [lat, lng])), { color: '#1c2230', weight: 3, fill: false }).addTo(layer);
   for (const b of c.barriers) L.polyline(b.line.map(([lng, lat]) => [lat, lng]), { color: '#cf3434', weight: 3, dashArray: '8 6' }).bindTooltip(b.note, { sticky: true }).addTo(layer);
@@ -262,13 +289,57 @@ function draw(z) {
   const when = z.hour == null ? 'в среднем за день' : `в ${HL(z.hour)}–${HL((z.hour + 1) % 24)}`;
   $('sum').innerHTML = `Зона <b>${when}</b>: <b>${inZone}</b> ячеек из ${z.hexes.length} в радиусе ${z.maxKm} км. Время посчитано по <b>${z.neighborOrders.toLocaleString('ru-RU')}</b> доставкам соседних ресторанов.`;
   drawMatrix(z);
-  $('rings').innerHTML = z.rings.map(r => `<tr><td><span class="sw" style="background:${B[r.band].color}"></span>${r.from}–${r.to} км${r.src !== 'рядом' ? ' *' : ''}</td><td class="n">${r.avg.toFixed(1)}</td><td class="n">${r.cells} из ${r.total}</td></tr>`).join('') +
-    (z.rings.some(r => r.src !== 'рядом') ? `<tr><td colspan="3" class="hint" style="border:0">* рядом мало данных, взято по более широкому району</td></tr>` : '');
+  $('rings').innerHTML = z.rings.map(r => { const m = eco ? eco.rings[r.r].margin : null; const cutHere = eco && eco.cut != null && r.r >= eco.cut && eco.verdict === 'cut';
+    return `<tr style="${cutHere ? 'background:color-mix(in srgb,#cf3434 8%,transparent)' : ''}"><td><span class="sw" style="background:${B[r.band].color}"></span>${r.from}–${r.to} км${r.src !== 'рядом' ? ' *' : ''}</td><td class="n">${r.avg.toFixed(1)}</td><td class="n ${m == null ? '' : m < 0 ? 'neg' : 'pos'}">${m == null ? '–' : fmt(m)}</td><td class="n">${r.cells} из ${r.total}</td></tr>`; }).join('') +
+    (z.rings.some(r => r.src !== 'рядом') ? `<tr><td colspan="4" class="hint" style="border:0">* рядом мало данных по времени, взято по более широкому району</td></tr>` : '');
+  renderEco(z);
   $('keys').innerHTML = Object.entries(STATUS).filter(([k]) => z.counts[k]).map(([k, s]) =>
     `<div><span class="k" style="background:${s.fill};opacity:.8;border:1px ${s.dash ? 'dashed' : 'solid'} ${s.stroke}"></span>${s.label}: ${z.counts[k]}</div>`).join('') +
+    (ecoLayer ? `<div><span class="k" style="background:#0f8a5f"></span>маржа от +500 ₸</div><div><span class="k" style="background:#7cc48f"></span>0…+500 ₸</div><div><span class="k" style="background:#e8692c"></span>−300…0 ₸</div><div><span class="k" style="background:#cf3434"></span>ниже −300 ₸</div>` : '') +
     `<div><span class="k" style="border:2px solid #1c2230"></span>Чёрный контур — граница зоны</div>`;
   $('result').hidden = false;
 }
+
+const fmt = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(Math.round(v)).toLocaleString('ru-RU');
+function ecoColor(m) { if (m == null) return '#b9bec8'; if (m >= 500) return '#0f8a5f'; if (m >= 0) return '#7cc48f'; if (m >= -300) return '#e8692c'; return '#cf3434'; }
+function renderEco(z) {
+  const box = $('eco');
+  if (!eco) { box.innerHTML = '<div class="eco"><b class="t">Экономика</b>По этому городу нет данных фуда.</div>'; return; }
+  const o = eco.own;
+  const head = o
+    ? `<b class="t">${o.name}: свои заказы фуда</b>${o.n.toLocaleString('ru-RU')} заказов · маржа <b class="${o.nf < 0 ? 'neg' : 'pos'}">${fmt(o.nf)} ₸</b> на заказ (CM2 с флэтом ${fmt(o.cm2)} ₸) · в минусе ${o.neg}% заказов · убыток по минусовым ${fmt(o.loss * 1000)} ₸ за период`
+    : `<b class="t">Оценка для новой точки</b>Своих заказов фуда нет, маржа по кольцам взята по ресторанам ${eco.qasyq ? 'Qasyq' : 'без Qasyq'}: ${eco.src}.`;
+  let cls = 'good', rec = '', btn = '';
+  const r0 = z.rings[eco.cut || 0];
+  if (eco.verdict === 'cut') {
+    cls = 'warn';
+    rec = `Устойчивый минус начинается с кольца <b>${r0.from} км</b> (≈${(r0.from * Zones.DETOUR).toFixed(1).replace('.', ',')} км по дороге). Рекомендация: ограничить зону <b>${r0.from} км</b>.`;
+    btn = r0.from >= 1 ? `<button class="apply" id="applyCut">Ограничить зону до ${r0.from} км</button>` : '';
+  } else if (eco.verdict === 'all') {
+    cls = 'bad';
+    rec = 'Заказы в минусе на любом расстоянии — убыток не из-за зоны. Срезка колец его не исправит: смотрите комиссию, средний чек, промо.';
+  } else if (eco.verdict === 'mixed') {
+    cls = 'warn';
+    rec = 'Есть отдельные минусовые кольца, но дальше маржа снова плюсовая — устойчивого порога нет, срезать по расстоянию не рекомендуем.';
+  } else rec = 'Все кольца окупаются, срезать зону по экономике не нужно.';
+  box.innerHTML = `<div class="eco ${cls}">${head}<div style="margin-top:7px">${rec}</div>${btn}<div class="hint" style="margin-top:7px">Маржа = CM2 без флэта на заказ (фуд), данные ${eco.period}. Кольца по прямой переведены в км по дороге ×${String(Zones.DETOUR).replace('.', ',')}.</div></div>`;
+  const b = $('applyCut'); if (b) b.onclick = () => { $('maxKm').value = r0.from; run(); };
+}
+function renderLosses() {
+  const c = D.cities[cityKey], list = Zones.lossList(c, 10);
+  $('losses').hidden = !list.length;
+  if (!list.length) return;
+  $('lossHint').textContent = `Сумма минусовых заказов за ${c.eco.period}, CM2 без флэта. Нажмите на ресторан, чтобы открыть его зону.`;
+  $('lossBody').innerHTML = list.map((x, i) => `<tr data-i="${i}"><td>${x.name}</td><td class="n neg">${fmt(x.e.loss)}</td><td class="n">${x.e.neg}%</td></tr>`).join('');
+  $('lossBody').querySelectorAll('tr').forEach(tr => tr.onclick = () => {
+    const x = list[+tr.dataset.i];
+    if (!x.p) { $('err').textContent = `Не нашёл координаты для «${x.name}» в списке ресторанов.`; return; }
+    $('coords').value = `${x.p[0]}, ${x.p[1]}`; $('brand').value = x.name.split(/\s+/)[0]; restName = x.name; run();
+    window.scrollTo({ top: 0, behavior: 'smooth' }); document.querySelector('aside').scrollTo({ top: 0, behavior: 'smooth' });
+  });
+}
+$('lyTime').onclick = () => { ecoLayer = false; $('lyTime').setAttribute('aria-pressed', true); $('lyEco').setAttribute('aria-pressed', false); if (last) draw(last); };
+$('lyEco').onclick = () => { ecoLayer = true; $('lyEco').setAttribute('aria-pressed', true); $('lyTime').setAttribute('aria-pressed', false); if (last) draw(last); };
 
 function drawMatrix(z) {
   if (!hourRows) return;
@@ -323,6 +394,7 @@ if (q.get('lat')) {
   $('coords').value = `${q.get('lat')}, ${q.get('lng')}`; $('brand').value = q.get('brand') || '';
   if (q.get('km')) $('maxKm').value = q.get('km'); if (q.get('min')) $('limit').value = q.get('min');
   if (q.get('h') !== null && q.get('h') !== '') { hour = +q.get('h'); renderHours(); }
+  if (q.get('r')) restName = q.get('r');
   if (q.get('extra')) $('extra').value = q.get('extra').split(';').map(s => s.replace(',', ', ')).join('\n');
   run();
 }
