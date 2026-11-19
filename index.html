@@ -69,6 +69,13 @@ h2{font-size:15px;margin:18px 0 2px}
 .eco.good{border-color:#a9d9bf;background:color-mix(in srgb,#0f8a5f 7%,var(--paper))}
 .eco b.t{display:block;margin-bottom:4px}
 .eco .apply{margin-top:9px;font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--ink);background:var(--ink);color:var(--paper);border-radius:8px;cursor:pointer}
+.tools{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.tools button,.mini{font:inherit;font-size:13px;padding:8px 6px;border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:8px;cursor:pointer}
+.tools button[aria-pressed="true"]{background:var(--focus);border-color:var(--focus);color:#fff;font-weight:600}
+.mode{display:none;margin-top:8px;padding:9px 10px;border-radius:9px;background:color-mix(in srgb,var(--focus) 10%,var(--paper));font-size:13px}
+.mode.on{display:block}
+.lines{margin:8px 0 0;padding:0;list-style:none;font-size:13px}
+.lines li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line)}
 .pos{color:#0f8a5f}.neg{color:#cf3434}
 .loss{width:100%;font-size:13px}
 .loss td{cursor:pointer}
@@ -127,6 +134,22 @@ h2{font-size:15px;margin:18px 0 2px}
     <div class="hint">Зона и время в кольцах пересчитаются под выбранный час.</div>
   </fieldset>
 
+  <fieldset>
+    <legend>Ручная правка</legend>
+    <div class="tools">
+      <button id="mEdit" aria-pressed="false">Править ячейки</button>
+      <button id="mLine" aria-pressed="false">Нарисовать стоп-линию</button>
+    </div>
+    <div class="mode" id="editHelp">Кликайте по ячейкам на карте: ячейка в зоне — уберётся, вне зоны — добавится. Ещё раз нажмите «Править ячейки», чтобы закончить.</div>
+    <div class="mode" id="lineHelp">Кликайте по карте, ставя точки линии (например, вдоль улицы или реки). Зона не будет заходить за линию со стороны ресторана.
+      <div class="row2" style="margin-top:8px;align-items:end"><div><label class="t" for="allowKm" style="font-weight:500;font-size:13px">Можно за линию, км</label><input type="number" id="allowKm" value="0" min="0" max="6" step="0.5"></div>
+      <div style="display:flex;gap:6px"><button class="mini" id="lineSave">Сохранить</button><button class="mini" id="lineCancel">Отмена</button></div></div>
+      <div class="hint">«Можно за линию» — как у аль-Фараби: ближе этого расстояния от ресторана за линию возить можно.</div>
+    </div>
+    <ul class="lines" id="lineList"></ul>
+    <button class="mini" id="resetEdits" style="margin-top:8px;width:100%" hidden>Сбросить ручные правки ячеек</button>
+  </fieldset>
+
   <button class="go" id="go">Построить зону</button>
   <div class="err" id="err" role="alert"></div>
 
@@ -182,6 +205,9 @@ if (!Zones.economy || !Zones.byHour) {
 const D = window.ZONE_DATA, B = Zones.BANDS;
 const $ = id => document.getElementById(id);
 let cityKey = 'almaty', last = null, layer = null, pin = null, hour = null, hourRows = null, eco = null, ecoLayer = false, restName = '';
+let mode = null, draft = [], draftLayer = null, customLines = {}, manual = { add: new Set(), remove: new Set() };
+const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+customLines = store.get('zones.lines') || {};
 
 const map = L.map('map', { zoomControl: true });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
@@ -192,6 +218,7 @@ const STATUS = {
   barrier: { label: 'За стоп-линией', fill: '#8a94a6', op: .14, stroke: '#8a94a6', dash: '2 3' },
   empty: { label: 'Заказов рядом не было', fill: '#b9bec8', op: .10, stroke: '#b9bec8', dash: '2 3' },
   island: { label: 'Оторвано от основной зоны', fill: '#b9bec8', op: .10, stroke: '#b9bec8', dash: '2 3' },
+  manual: { label: 'Убрано вручную', fill: '#7a4fd1', op: .22, stroke: '#7a4fd1', dash: '4 3' },
 };
 
 function renderCities() {
@@ -208,7 +235,7 @@ function setCity(k, move) {
   const c = D.cities[k];
   $('restList').innerHTML = c.rest.map(r => `<option value="${r[0].replace(/"/g, '&quot;')}">`).join('');
   $('foot').textContent = `Данные: доставки ${c.name} за ${c.period}, ${c.orders.toLocaleString('ru-RU')} заказов. Обновлено ${D.updated.split('-').reverse().join('.')}.`;
-  renderLosses();
+  renderLosses(); renderLines();
   if (move) { map.setView(c.center, c.zoom); clearZone(); }
 }
 const HL = h => String(h).padStart(2, '0') + ':00';
@@ -254,7 +281,44 @@ $('rest').addEventListener('change', () => {
 $('coords').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
 $('go').onclick = () => run();
 $('coords').addEventListener('input', () => { restName = ''; });
-map.on('click', e => { restName = ''; $('coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; run(); });
+function setMode(m) {
+  mode = mode === m ? null : m;
+  $('mEdit').setAttribute('aria-pressed', mode === 'edit'); $('mLine').setAttribute('aria-pressed', mode === 'line');
+  $('editHelp').classList.toggle('on', mode === 'edit'); $('lineHelp').classList.toggle('on', mode === 'line');
+  if (mode !== 'line') clearDraft();
+  map.getContainer().style.cursor = mode ? 'crosshair' : '';
+}
+function clearDraft() { draft = []; if (draftLayer) map.removeLayer(draftLayer); draftLayer = null; }
+function drawDraft() {
+  if (draftLayer) map.removeLayer(draftLayer);
+  draftLayer = L.layerGroup([L.polyline(draft, { color: '#3b73d9', weight: 4, dashArray: '6 5' })].concat(draft.map(p => L.circleMarker(p, { radius: 4, color: '#3b73d9', fillOpacity: 1 })))).addTo(map);
+}
+$('mEdit').onclick = () => { if (!last) { $('err').textContent = 'Сначала постройте зону.'; return; } setMode('edit'); };
+$('mLine').onclick = () => setMode('line');
+$('lineCancel').onclick = () => { clearDraft(); setMode(null); };
+$('lineSave').onclick = () => {
+  if (draft.length < 2) { $('err').textContent = 'Поставьте хотя бы две точки линии.'; return; }
+  (customLines[cityKey] = customLines[cityKey] || []).push({ pts: draft.map(p => [+p[0].toFixed(5), +p[1].toFixed(5)]), allowKm: Math.max(0, +$('allowKm').value || 0), name: 'Стоп-линия ' + ((customLines[cityKey] || []).length) });
+  store.set('zones.lines', customLines); clearDraft(); setMode(null); renderLines(); if (last) run(true);
+};
+function renderLines() {
+  const ls = customLines[cityKey] || [];
+  $('lineList').innerHTML = ls.map((l, i) => `<li><span>${l.name}${l.allowKm ? ` · можно за линию до ${l.allowKm} км` : ''}</span><button class="mini" data-i="${i}">Удалить</button></li>`).join('');
+  $('lineList').querySelectorAll('button').forEach(b => b.onclick = () => { ls.splice(+b.dataset.i, 1); store.set('zones.lines', customLines); renderLines(); if (last) run(true); });
+}
+function editKey() { const p = parseCoords($('coords').value); return p ? 'zones.edits.' + p[0].toFixed(4) + ',' + p[1].toFixed(4) : null; }
+function loadEdits() { if (window._sharedEdits) { const s = window._sharedEdits; window._sharedEdits = null; manual = { add: new Set(s.add), remove: new Set(s.remove) }; saveEdits(); return; } const v = store.get(editKey()); manual = { add: new Set(v ? v.add : []), remove: new Set(v ? v.remove : []) }; }
+function saveEdits() { const k = editKey(); if (k) store.set(k, { add: [...manual.add], remove: [...manual.remove] }); }
+function toggleHex(x) {
+  if (x.status === 'ok') { if (manual.add.has(x.h)) manual.add.delete(x.h); else manual.remove.add(x.h); }
+  else { if (manual.remove.has(x.h)) manual.remove.delete(x.h); else manual.add.add(x.h); }
+  saveEdits(); run(true);
+}
+$('resetEdits').onclick = () => { manual = { add: new Set(), remove: new Set() }; saveEdits(); run(true); };
+map.on('click', e => {
+  if (mode === 'line') { draft.push([e.latlng.lat, e.latlng.lng]); drawDraft(); return; }
+  if (mode === 'edit') return;
+  restName = ''; $('coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; run(); });
 
 function run(keepHours) {
   const p = parseCoords($('coords').value);
@@ -271,12 +335,14 @@ function run(keepHours) {
     if (!q) { $('err').textContent = `Не получилось прочитать координаты филиала в строке ${i + 1}: «${line.trim()}».`; return; }
     extra.push(['Новый филиал ' + (extra.length + 1), q[0], q[1]]);
   }
-  const opts = { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit, extraBranches: extra };
+  if (!keepHours) loadEdits();
+  const opts = { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit, extraBranches: extra, customLines: customLines[cityKey] || [], manual };
   last = Zones.build(D.cities[cityKey], Object.assign({ hour }, opts));
   if (Zones.byHour && D.hourOrder && (!keepHours || !hourRows)) hourRows = Zones.byHour(D.cities[cityKey], opts, D.hourOrder);
   eco = Zones.economy ? Zones.economy(D.cities[cityKey], Object.assign({ restName }, opts), last.rings) : null;
   draw(last);
-  location.hash = new URLSearchParams({ lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, h: hour == null ? '' : hour, r: restName, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
+  const shareLines = (customLines[cityKey] || []).map(l => l.allowKm + '@' + l.pts.map(q => q[0] + ',' + q[1]).join(';')).join('|');
+  location.hash = new URLSearchParams({ sl: shareLines, ma: [...manual.add].join('.'), mr: [...manual.remove].join('.'), lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, h: hour == null ? '' : hour, r: restName, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
 }
 
 function draw(z) {
@@ -289,11 +355,18 @@ function draw(z) {
     if (x.status === 'ok' && ecoLayer && eco) { const m = eco.rings[x.r].margin; const col = ecoColor(m); style = { color: col, weight: 1, fillColor: col, fillOpacity: .5 }; }
     else if (x.status === 'ok') { const col = B[ring.band].color; style = { color: col, weight: 1, fillColor: col, fillOpacity: .42 }; }
     else { const s = STATUS[x.status]; style = { color: s.stroke, weight: 1, fillColor: s.fill, fillOpacity: s.op, dashArray: s.dash }; }
-    const em = eco && eco.rings[x.r].margin != null ? `<br>маржа ~${fmt(eco.rings[x.r].margin)} ₸ на заказ` : '';
-    L.polygon(bd, style).bindTooltip(`${ring.from}–${ring.to} км · ~${Math.round(x.est)} мин` + em + (x.why ? `<br>${x.why}` : '')).addTo(layer);
+    const mv = eco ? eco.rings[x.r].margin : null;
+    const em = mv == null ? '' : mv < 0
+      ? `<br><span style="color:#cf3434">убыток ${Math.abs(Math.round(mv)).toLocaleString('ru-RU')} ₸ на заказ</span>`
+      : `<br><span style="color:#0f8a5f">прибыль ${Math.round(mv).toLocaleString('ru-RU')} ₸ на заказ</span>`;
+    if (x.added) { style.color = '#7a4fd1'; style.weight = 2; }
+    L.polygon(bd, style).bindTooltip(`${ring.from}–${ring.to} км · ~${Math.round(x.est)} мин` + em + (x.why ? `<br>${x.why}` : ''))
+      .on('click', ev => { if (mode === 'edit') { L.DomEvent.stopPropagation(ev); toggleHex(x); } }).addTo(layer);
   }
   for (const poly of z.outline) L.polygon(poly.map(r => r.map(([lng, lat]) => [lat, lng])), { color: '#1c2230', weight: 3, fill: false }).addTo(layer);
   for (const b of c.barriers) L.polyline(b.line.map(([lng, lat]) => [lat, lng]), { color: '#cf3434', weight: 3, dashArray: '8 6' }).bindTooltip(b.note, { sticky: true }).addTo(layer);
+  for (const l of (customLines[cityKey] || [])) L.polyline(l.pts, { color: '#7a4fd1', weight: 4 }).bindTooltip(l.name + (l.allowKm ? ` · можно за линию до ${l.allowKm} км` : ''), { sticky: true }).addTo(layer);
+  $('resetEdits').hidden = !(manual.add.size || manual.remove.size);
   for (const b of z.branches) L.circleMarker([b[1], b[2]], { radius: 7, color: '#fff', weight: 2, fillColor: '#6c7689', fillOpacity: 1 }).bindTooltip(b[0]).addTo(layer);
   L.marker(z.point, { icon: L.divIcon({ className: '', html: '<div class="pin"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(layer);
   map.fitBounds(L.featureGroup(layer.getLayers()).getBounds(), { padding: [24, 24] });
@@ -309,6 +382,7 @@ function draw(z) {
   $('keys').innerHTML = Object.entries(STATUS).filter(([k]) => z.counts[k]).map(([k, s]) =>
     `<div><span class="k" style="background:${s.fill};opacity:.8;border:1px ${s.dash ? 'dashed' : 'solid'} ${s.stroke}"></span>${s.label}: ${z.counts[k]}</div>`).join('') +
     (ecoLayer ? `<div><span class="k" style="background:#0f8a5f"></span>маржа от +500 ₸</div><div><span class="k" style="background:#7cc48f"></span>0…+500 ₸</div><div><span class="k" style="background:#e8692c"></span>−300…0 ₸</div><div><span class="k" style="background:#cf3434"></span>ниже −300 ₸</div>` : '') +
+    (manual.add.size ? `<div><span class="k" style="border:2px solid #7a4fd1"></span>Добавлено вручную: ${manual.add.size}</div>` : '') +
     `<div><span class="k" style="border:2px solid #1c2230"></span>Чёрный контур — граница зоны</div>`;
   $('result').hidden = false;
 }
@@ -377,7 +451,7 @@ function save(name, text, type) {
   a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
-const statusRu = { ok: 'в зоне', slow: 'дольше порога', branch: 'другой филиал', barrier: 'за стоп-линией', empty: 'нет заказов', island: 'оторвано' };
+const statusRu = { manual: 'убрано вручную', ok: 'в зоне', slow: 'дольше порога', branch: 'другой филиал', barrier: 'за стоп-линией', empty: 'нет заказов', island: 'оторвано' };
 $('csv').onclick = () => {
   if (!last) return;
   const rows = [['h3_index_res9', 'кольцо_км', 'среднее_кольца_мин', 'оценка_ячейки_мин', 'цвет', 'статус', 'час']];
@@ -408,6 +482,11 @@ if (q.get('lat')) {
   if (q.get('km')) $('maxKm').value = q.get('km'); if (q.get('min')) $('limit').value = q.get('min');
   if (q.get('h') !== null && q.get('h') !== '') { hour = +q.get('h'); renderHours(); }
   if (q.get('r')) restName = q.get('r');
+  window._sharedEdits = (q.get('ma') || q.get('mr')) ? { add: (q.get('ma') || '').split('.').filter(Boolean), remove: (q.get('mr') || '').split('.').filter(Boolean) } : null;
+  if (q.get('sl')) {
+    const p0 = parseCoords(`${q.get('lat')}, ${q.get('lng')}`), ck = p0 && nearestCity(p0);
+    if (ck) { customLines[ck] = q.get('sl').split('|').filter(Boolean).map((s, i) => { const [a, pts] = s.split('@'); return { allowKm: +a || 0, name: 'Стоп-линия ' + (i + 1), pts: pts.split(';').map(t => t.split(',').map(Number)) }; }); store.set('zones.lines', customLines); }
+  }
   if (q.get('extra')) $('extra').value = q.get('extra').split(';').map(s => s.replace(',', ', ')).join('\n');
   run();
 }
