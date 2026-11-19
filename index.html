@@ -50,6 +50,19 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .exp{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .exp button{font:inherit;font-size:14px;padding:9px;border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:9px;cursor:pointer}
 .exp button.wide{grid-column:1/-1}
+.hours{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;margin-top:6px}
+.hours button,.allday{font:inherit;font-size:13px;padding:6px 0;border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:7px;cursor:pointer;font-variant-numeric:tabular-nums}
+.allday{width:100%;padding:7px}
+.hours button[aria-pressed="true"],.allday[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink);font-weight:600}
+.mx{overflow-x:auto;margin:6px 0 14px;border:1px solid var(--line);border-radius:9px;background:var(--paper)}
+.mx table{margin:0;font-size:11.5px;border-collapse:separate;border-spacing:0}
+.mx th,.mx td{padding:4px 3px;text-align:center;border:0;white-space:nowrap;font-variant-numeric:tabular-nums}
+.mx th{color:var(--ink-3);font-weight:500;cursor:pointer}
+.mx th.sel{color:var(--ink);font-weight:700;box-shadow:inset 0 -2px 0 var(--ink)}
+.mx td.rl,.mx th.rl{text-align:left;padding-left:8px;position:sticky;left:0;background:var(--paper);color:var(--ink-2);cursor:default}
+.mx td.c{color:#fff;font-weight:600;min-width:26px}
+.mx tr.cells td{color:var(--ink-2);border-top:1px solid var(--line)}
+h2{font-size:15px;margin:18px 0 2px}
 .foot{margin-top:22px;font-size:12.5px;color:var(--ink-3)}
 .pin{width:18px;height:18px;border-radius:50%;background:var(--bag);border:3px solid #1c2230;box-shadow:0 0 0 2px #fff}
 .leaflet-tooltip{font-family:inherit}
@@ -94,6 +107,13 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
     <div><label class="t" for="limit">Порог, мин</label><input type="number" id="limit" value="25" min="10" max="45" step="1"></div>
   </fieldset>
 
+  <fieldset>
+    <legend>Время суток</legend>
+    <button class="allday" id="allday" aria-pressed="true">Весь день</button>
+    <div class="hours" id="hours" role="group" aria-label="Час"></div>
+    <div class="hint">Зона и время в кольцах пересчитаются под выбранный час.</div>
+  </fieldset>
+
   <button class="go" id="go">Построить зону</button>
   <div class="err" id="err" role="alert"></div>
 
@@ -104,10 +124,14 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
       <tbody id="rings"></tbody>
     </table>
     <div class="keys" id="keys"></div>
+    <h2>Среднее время по часам, мин</h2>
+    <p class="hint" style="margin:0">Нажмите на час, чтобы увидеть зону в это время.</p>
+    <div class="mx" id="mx"></div>
     <div class="exp">
       <button id="csv">Скачать CSV</button>
       <button id="geo">Скачать GeoJSON</button>
       <button id="copy" class="wide">Скопировать ID ячеек зоны</button>
+      <button id="mxcsv" class="wide">Скачать таблицу по часам</button>
     </div>
   </section>
 
@@ -123,7 +147,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 <script>
 const D = window.ZONE_DATA, B = Zones.BANDS;
 const $ = id => document.getElementById(id);
-let cityKey = 'almaty', last = null, layer = null, pin = null;
+let cityKey = 'almaty', last = null, layer = null, pin = null, hour = null, hourRows = null;
 
 const map = L.map('map', { zoomControl: true });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
@@ -152,6 +176,20 @@ function setCity(k, move) {
   $('foot').textContent = `Данные: доставки ${c.name} за ${c.period}, ${c.orders.toLocaleString('ru-RU')} заказов. Обновлено ${D.updated.split('-').reverse().join('.')}.`;
   if (move) { map.setView(c.center, c.zoom); clearZone(); }
 }
+const HL = h => String(h).padStart(2, '0') + ':00';
+function renderHours() {
+  $('hours').innerHTML = '';
+  for (const hh of D.hourOrder) {
+    const b = document.createElement('button');
+    b.textContent = String(hh).padStart(2, '0'); b.title = HL(hh);
+    b.setAttribute('aria-pressed', hour === hh);
+    b.onclick = () => setHour(hh);
+    $('hours').appendChild(b);
+  }
+  $('allday').setAttribute('aria-pressed', hour == null);
+}
+function setHour(hh) { hour = hh; renderHours(); if (last) run(true); }
+$('allday').onclick = () => setHour(null);
 function clearZone() { if (layer) map.removeLayer(layer); layer = null; $('result').hidden = true; }
 
 function parseCoords(s) {
@@ -178,10 +216,10 @@ $('rest').addEventListener('change', () => {
 });
 ['coords', 'brand', 'extra', 'maxKm', 'limit'].forEach(id => $(id).addEventListener('input', () => $('err').textContent = ''));
 $('coords').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
-$('go').onclick = run;
+$('go').onclick = () => run();
 map.on('click', e => { $('coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; run(); });
 
-function run() {
+function run(keepHours) {
   const p = parseCoords($('coords').value);
   if (!p) { $('err').textContent = 'Введите координаты в виде «широта, долгота» или кликните по карте.'; return; }
   const ck = nearestCity(p);
@@ -196,9 +234,11 @@ function run() {
     if (!q) { $('err').textContent = `Не получилось прочитать координаты филиала в строке ${i + 1}: «${line.trim()}».`; return; }
     extra.push(['Новый филиал ' + (extra.length + 1), q[0], q[1]]);
   }
-  last = Zones.build(D.cities[cityKey], { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit, extraBranches: extra });
+  const opts = { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit, extraBranches: extra };
+  last = Zones.build(D.cities[cityKey], Object.assign({ hour }, opts));
+  if (!keepHours || !hourRows) hourRows = Zones.byHour(D.cities[cityKey], opts, D.hourOrder);
   draw(last);
-  location.hash = new URLSearchParams({ lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
+  location.hash = new URLSearchParams({ lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, h: hour == null ? '' : hour, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
 }
 
 function draw(z) {
@@ -219,7 +259,9 @@ function draw(z) {
   map.fitBounds(L.featureGroup(layer.getLayers()).getBounds(), { padding: [24, 24] });
 
   const inZone = z.counts.ok || 0;
-  $('sum').innerHTML = `В зоне <b>${inZone}</b> ячеек из ${z.hexes.length} в радиусе ${z.maxKm} км. Время посчитано по <b>${z.neighborOrders.toLocaleString('ru-RU')}</b> доставкам соседних ресторанов.`;
+  const when = z.hour == null ? 'в среднем за день' : `в ${HL(z.hour)}–${HL((z.hour + 1) % 24)}`;
+  $('sum').innerHTML = `Зона <b>${when}</b>: <b>${inZone}</b> ячеек из ${z.hexes.length} в радиусе ${z.maxKm} км. Время посчитано по <b>${z.neighborOrders.toLocaleString('ru-RU')}</b> доставкам соседних ресторанов.`;
+  drawMatrix(z);
   $('rings').innerHTML = z.rings.map(r => `<tr><td><span class="sw" style="background:${B[r.band].color}"></span>${r.from}–${r.to} км${r.src !== 'рядом' ? ' *' : ''}</td><td class="n">${r.avg.toFixed(1)}</td><td class="n">${r.cells} из ${r.total}</td></tr>`).join('') +
     (z.rings.some(r => r.src !== 'рядом') ? `<tr><td colspan="3" class="hint" style="border:0">* рядом мало данных, взято по более широкому району</td></tr>` : '');
   $('keys').innerHTML = Object.entries(STATUS).filter(([k]) => z.counts[k]).map(([k, s]) =>
@@ -228,7 +270,24 @@ function draw(z) {
   $('result').hidden = false;
 }
 
-function fileName(ext) { const p = last.point; return `zona_${D.cities[cityKey].name}_${p[0].toFixed(4)}_${p[1].toFixed(4)}.${ext}`; }
+function drawMatrix(z) {
+  if (!hourRows) return;
+  const head = '<tr><th class="rl">Кольцо</th>' + hourRows.map(r => `<th class="${r.hour === z.hour ? 'sel' : ''}" data-h="${r.hour}" title="${HL(r.hour)} · ${r.orders} доставок в городе">${String(r.hour).padStart(2, '0')}</th>`).join('') + '</tr>';
+  const body = z.rings.map((ring, i) => '<tr><td class="rl">' + `${ring.from}–${ring.to}` + '</td>' +
+    hourRows.map(r => { const v = r.rings[i]; return `<td class="c" style="background:${B[Zones.bandOf(v)].color}" title="${HL(r.hour)}, ${ring.from}–${ring.to} км: ${v.toFixed(1)} мин">${Math.round(v)}</td>`; }).join('') + '</tr>').join('');
+  const cells = '<tr class="cells"><td class="rl">Ячеек</td>' + hourRows.map(r => `<td>${r.cells}</td>`).join('') + '</tr>';
+  $('mx').innerHTML = `<table>${head}${body}${cells}</table>`;
+  $('mx').querySelectorAll('th[data-h]').forEach(th => th.onclick = () => setHour(+th.dataset.h));
+}
+$('mxcsv').onclick = () => {
+  if (!last || !hourRows) return;
+  const rows = [['кольцо_км'].concat(hourRows.map(r => HL(r.hour)))];
+  last.rings.forEach((ring, i) => rows.push([`${ring.from}-${ring.to}`].concat(hourRows.map(r => r.rings[i].toFixed(1).replace('.', ',')))));
+  rows.push(['ячеек_в_зоне'].concat(hourRows.map(r => r.cells)));
+  save(fileName('csv').replace('zona_', 'zona_po_chasam_'), '\ufeff' + rows.map(r => r.join(';')).join('\n'), 'text/csv');
+};
+
+function fileName(ext) { const p = last.point; return `zona_${D.cities[cityKey].name}_${p[0].toFixed(4)}_${p[1].toFixed(4)}${last.hour == null ? '' : '_' + String(last.hour).padStart(2, '0') + 'h'}.${ext}`; }
 function save(name, text, type) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
@@ -237,8 +296,8 @@ function save(name, text, type) {
 const statusRu = { ok: 'в зоне', slow: 'дольше порога', branch: 'другой филиал', barrier: 'за стоп-линией', empty: 'нет заказов', island: 'оторвано' };
 $('csv').onclick = () => {
   if (!last) return;
-  const rows = [['h3_index_res9', 'кольцо_км', 'среднее_кольца_мин', 'оценка_ячейки_мин', 'цвет', 'статус']];
-  for (const x of last.hexes) { const r = last.rings[x.r]; rows.push([x.h, `${r.from}-${r.to}`, r.avg.toFixed(1), Math.round(x.est), B[r.band].name, statusRu[x.status]]); }
+  const rows = [['h3_index_res9', 'кольцо_км', 'среднее_кольца_мин', 'оценка_ячейки_мин', 'цвет', 'статус', 'час']];
+  for (const x of last.hexes) { const r = last.rings[x.r]; rows.push([x.h, `${r.from}-${r.to}`, r.avg.toFixed(1), Math.round(x.est), B[r.band].name, statusRu[x.status], last.hour == null ? 'весь день' : HL(last.hour)]); }
   save(fileName('csv'), '\ufeff' + rows.map(r => r.join(';')).join('\n'), 'text/csv');
 };
 $('geo').onclick = () => {
@@ -258,11 +317,12 @@ $('copy').onclick = async () => {
   setTimeout(() => $('copy').textContent = 'Скопировать ID ячеек зоны', 2000);
 };
 
-renderCities(); setCity(cityKey, true);
+renderCities(); renderHours(); setCity(cityKey, true);
 const q = new URLSearchParams(location.hash.slice(1));
 if (q.get('lat')) {
   $('coords').value = `${q.get('lat')}, ${q.get('lng')}`; $('brand').value = q.get('brand') || '';
   if (q.get('km')) $('maxKm').value = q.get('km'); if (q.get('min')) $('limit').value = q.get('min');
+  if (q.get('h') !== null && q.get('h') !== '') { hour = +q.get('h'); renderHours(); }
   if (q.get('extra')) $('extra').value = q.get('extra').split(';').map(s => s.replace(',', ', ')).join('\n');
   run();
 }
