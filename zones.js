@@ -79,6 +79,8 @@
     const p = [opts.lat, opts.lng];
     const maxKm = opts.maxKm || 4, limit = opts.limit || 25;
     const prof = profile(city, p, maxKm);
+    const hf = (opts.hour != null && city.hours && city.hours[opts.hour]) ? city.hours[opts.hour] : null;
+    if (hf) for (const ring of prof.rings) { ring.dayAvg = ring.avg; ring.avg = ring.avg * (hf[Math.min(ring.r, hf.length - 1)] || 1); }
     const brand = (opts.brand || '').trim().toLowerCase();
     const branches = (brand
       ? city.rest.filter(r => r[0].toLowerCase().startsWith(brand) && km(p, [r[1], r[2]]) > 0.15)
@@ -124,10 +126,20 @@
     }
     const counts = {};
     for (const x of hexes) counts[x.status] = (counts[x.status] || 0) + 1;
-    return { point: p, rings: prof.rings, neighborOrders: prof.neighborOrders, hexes, outline, branches, counts, maxKm, limit };
+    return { hour: opts.hour == null ? null : opts.hour, point: p, rings: prof.rings, neighborOrders: prof.neighborOrders, hexes, outline, branches, counts, maxKm, limit };
   }
 
-  const api = { build, BANDS, bandOf, RES };
+  // Среднее время по кольцам для каждого часа + размер зоны в каждый час
+  function byHour(city, opts, hours) {
+    const rows = [];
+    for (const h of hours) {
+      const z = build(city, Object.assign({}, opts, { hour: h }));
+      rows.push({ hour: h, rings: z.rings.map(r => r.avg), cells: z.counts.ok || 0, orders: (city.hourOrders || {})[h] || 0 });
+    }
+    return rows;
+  }
+
+  const api = { build, byHour, BANDS, bandOf, RES };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Zones = api;
 })(this);
