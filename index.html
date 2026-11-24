@@ -172,6 +172,13 @@ h2{font-size:15px;margin:18px 0 2px}
     <h2>Среднее время по часам, мин</h2>
     <p class="hint" style="margin:0">Нажмите на час, чтобы увидеть зону в это время.</p>
     <div class="mx" id="mx"></div>
+    <h2>Выгрузка в Гермес</h2>
+    <div class="row2" style="margin:6px 0 8px">
+      <div><label class="t" for="tarId" style="font-weight:500;font-size:13px">Delivery Tariff ID</label><input type="number" id="tarId" value="6" min="0"></div>
+      <div><label class="t" for="timeId" style="font-weight:500;font-size:13px">Delivery Time ID</label><input type="number" id="timeId" value="2" min="0"></div>
+    </div>
+    <button class="go" id="hermes" style="font-size:15px;padding:11px;margin-bottom:8px">Скачать CSV для Гермеса</button>
+    <p class="hint" style="margin:0 0 12px">Формат как у выгрузки из Гермеса: ячейки H3 разрешения 10, расстояние до ресторана в метрах.</p>
     <div class="exp">
       <button id="csv">Скачать CSV</button>
       <button id="geo">Скачать GeoJSON</button>
@@ -185,6 +192,7 @@ h2{font-size:15px;margin:18px 0 2px}
     <h2>Зоны всех филиалов</h2>
     <p class="hint" style="margin:0 0 6px">Каждый филиал — своим цветом, территория поделена между ними.</p>
     <table class="loss"><thead><tr><th>Филиал</th><th class="n">Ячеек</th><th class="n">км²</th></tr></thead><tbody id="multiBody"></tbody></table>
+    <button class="go" id="mHermes" style="font-size:15px;padding:11px;margin:4px 0 8px">Скачать CSV для Гермеса по каждому филиалу</button>
     <div class="exp"><button id="mCsv">Скачать CSV</button><button id="mGeo">Скачать GeoJSON</button><button id="mBack" class="wide">Назад к одной зоне</button></div>
   </section>
 
@@ -848,6 +856,14 @@ $('mCsv').onclick = () => {
   for (const m of multi) for (const x of m.z.hexes) if (x.status === 'ok') { const r = m.z.rings[x.r]; rows.push([m.name, x.h, `${r.from}-${r.to}`, r.avg.toFixed(1), Math.round(x.est)]); }
   save(`zony_filialov_${D.cities[cityKey].name}.csv`, '\ufeff' + rows.map(r => r.join(';')).join('\n'), 'text/csv');
 };
+$('mHermes').onclick = async () => {
+  if (!multi) return;
+  for (const m of multi) {
+    const rows = [HERMES_HEAD].concat(hermesRows(m.z));
+    save(`hermes_${m.name.replace(/[^\wа-яё]+/gi, '_')}.csv`, rows.map(r => r.join(',')).join('\r\n') + '\r\n', 'text/csv');
+    await new Promise(r => setTimeout(r, 400));
+  }
+};
 $('mGeo').onclick = () => {
   if (!multi) return;
   const feats = [];
@@ -870,6 +886,20 @@ $('csv').onclick = () => {
   const rows = [['h3_index_res9', 'кольцо_км', 'среднее_кольца_мин', 'оценка_ячейки_мин', 'цвет', 'статус', 'час']];
   for (const x of last.hexes) { const r = last.rings[x.r]; rows.push([x.h, `${r.from}-${r.to}`, r.avg.toFixed(1), Math.round(x.est), B[r.band].name, statusRu[x.status], last.hour == null ? 'весь день' : HL(last.hour)]); }
   save(fileName('csv'), '\ufeff' + rows.map(r => r.join(';')).join('\n'), 'text/csv');
+};
+function hermesRows(zone, name) {
+  const t = String(Math.max(0, parseInt($('tarId').value) || 0)), m = String(Math.max(0, parseInt($('timeId').value) || 0));
+  const rows = [];
+  for (const x of zone.hexes) if (x.status === 'ok')
+    for (const k of h3.cellToChildren(x.h, 10))
+      rows.push([k, t, m, 'False', String(Math.round(h3.greatCircleDistance(zone.point, h3.cellToLatLng(k), 'm')))]);
+  return rows;
+}
+const HERMES_HEAD = ['Area Key', 'Delivery Tariff ID', 'Delivery Time ID', 'Is Reduced Area', 'Distance from restaurant'];
+$('hermes').onclick = () => {
+  if (!last) return;
+  const rows = [HERMES_HEAD].concat(hermesRows(last));
+  save(fileName('csv').replace('zona_', 'hermes_'), rows.map(r => r.join(',')).join('\r\n') + '\r\n', 'text/csv');
 };
 $('geo').onclick = () => {
   if (!last) return;
