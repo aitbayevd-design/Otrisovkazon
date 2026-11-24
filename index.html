@@ -173,6 +173,10 @@ h2{font-size:15px;margin:18px 0 2px}
     <p class="hint" style="margin:0">Нажмите на час, чтобы увидеть зону в это время.</p>
     <div class="mx" id="mx"></div>
     <h2>Выгрузка в Гермес</h2>
+    <p class="hint" style="margin:2px 0 8px">Загрузите текущую зону ресторана, скачанную из Гермеса: тариф и время подставятся из неё без изменений, а текущая зона появится на карте для сравнения.</p>
+    <label class="mini" for="hermesFile" style="display:block;text-align:center;margin-bottom:6px;cursor:pointer">Загрузить текущую зону из Гермеса (CSV)</label>
+    <input type="file" id="hermesFile" accept=".csv,text/csv" hidden>
+    <div id="hermesInfo" class="hint" style="margin:0 0 8px"></div>
     <div class="row2" style="margin:6px 0 8px">
       <div><label class="t" for="tarId" style="font-weight:500;font-size:13px">Delivery Tariff ID</label><input type="number" id="tarId" value="6" min="0"></div>
       <div><label class="t" for="timeId" style="font-weight:500;font-size:13px">Delivery Time ID</label><input type="number" id="timeId" value="2" min="0"></div>
@@ -457,6 +461,7 @@ if (!Zones.economy || !Zones.byHour) {
 const D = window.ZONE_DATA, B = Zones.BANDS;
 const $ = id => document.getElementById(id);
 let cityKey = 'almaty', last = null, layer = null, pin = null, hour = null, hourRows = null, eco = null, ecoLayer = false, restName = '';
+let hermesCur = null;
 let mode = null, draft = [], draftLayer = null, customLines = {}, manual = { add: new Set(), remove: new Set() };
 const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 customLines = store.get('zones.lines') || {};
@@ -715,6 +720,7 @@ function run(keepHours) {
   eco = Zones.economy ? Zones.economy(D.cities[cityKey], Object.assign({ restName }, opts), last.rings) : null;
   multi = null; $('multi').hidden = true;
   draw(last);
+  fillLabelIfMissing(p);
   const shareLines = (customLines[cityKey] || []).map(l => l.allowKm + '@' + l.pts.map(q => q[0] + ',' + q[1]).join(';')).join('|');
   location.hash = new URLSearchParams({ sl: shareLines, ma: [...manual.add].join('.'), mr: [...manual.remove].join('.'), lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, h: hour == null ? '' : hour, r: restName, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
 }
@@ -741,6 +747,8 @@ function draw(z) {
   for (const b of c.barriers) L.polyline(b.line.map(([lng, lat]) => [lat, lng]), { color: '#cf3434', weight: 3, dashArray: '8 6' }).bindTooltip(b.note, { sticky: true }).addTo(layer);
   for (const l of (customLines[cityKey] || [])) L.polyline(l.pts, { color: '#7a4fd1', weight: 4 }).bindTooltip(l.name + (l.allowKm ? ` · можно за линию до ${l.allowKm} км` : ''), { sticky: true }).addTo(layer);
   $('resetEdits').hidden = !(manual.add.size || manual.remove.size);
+  if (hermesCur) { try { for (const poly of h3.cellsToMultiPolygon(hermesCur.cells, true)) L.polygon(poly.map(r => r.map(([lng, lat]) => [lat, lng])), { color: '#7a4fd1', weight: 3, dashArray: '7 5', fill: false }).bindTooltip('Текущая зона в Гермесе', { sticky: true }).addTo(layer); } catch {} }
+  setTimeout(renderHermesInfo, 0);
   for (const b of z.branches) L.circleMarker([b[1], b[2]], { radius: 7, color: '#fff', weight: 2, fillColor: '#6c7689', fillOpacity: 1 }).bindTooltip(b[0]).addTo(layer);
   L.marker(z.point, { icon: L.divIcon({ className: '', html: '<div class="pin"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(layer);
   map.fitBounds(L.featureGroup(layer.getLayers()).getBounds(), { padding: [24, 24] });
@@ -795,7 +803,7 @@ function renderLosses() {
   $('lossBody').querySelectorAll('tr').forEach(tr => tr.onclick = () => {
     const x = list[+tr.dataset.i];
     if (!x.p) { $('err').textContent = `Не нашёл координаты для «${x.name}» в списке ресторанов.`; return; }
-    $('coords').value = `${x.p[0]}, ${x.p[1]}`; $('brand').value = x.name.split(/\s+/)[0]; restName = x.name; run();
+    $('coords').value = `${x.p[0]}, ${x.p[1]}`; $('brand').value = x.name.split(/\s+/)[0]; restName = x.name; $('picked').textContent = '📍 ' + x.name; run();
     window.scrollTo({ top: 0, behavior: 'smooth' }); document.querySelector('aside').scrollTo({ top: 0, behavior: 'smooth' });
   });
 }
@@ -874,7 +882,34 @@ $('mGeo').onclick = () => {
   save(`zony_filialov_${D.cities[cityKey].name}.geojson`, JSON.stringify({ type: 'FeatureCollection', features: feats }), 'application/geo+json');
 };
 
-function fileName(ext) { const p = last.point; return `zona_${D.cities[cityKey].name}_${p[0].toFixed(4)}_${p[1].toFixed(4)}${last.hour == null ? '' : '_' + String(last.hour).padStart(2, '0') + 'h'}.${ext}`; }
+function placeName() {
+  const pk = ($('picked').textContent || '').replace('📍 ', '').trim();
+  const lbl = restName || (pk && !/^точка (из ссылки|с карты)$/.test(pk) ? pk : '');
+  return lbl.replace(/[\\/:*?"<>|#%&{}$!'@`=+]+/g, ' ').replace(/[,.]+/g, ' ').replace(/\s+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70);
+}
+function fileName(ext) {
+  const p = last.point, nm = placeName();
+  const where = nm ? `${D.cities[cityKey].name}_${nm}` : `${D.cities[cityKey].name}_${p[0].toFixed(4)}_${p[1].toFixed(4)}`;
+  return `zona_${where}${last.hour == null ? '' : '_' + String(last.hour).padStart(2, '0') + 'h'}.${ext}`;
+}
+// Адрес по координатам (для точек с карты, из ссылки или введённых координатами)
+async function reverseLabel(p) {
+  try {
+    const r = await fetch(`https://photon.komoot.io/reverse?lat=${p[0]}&lon=${p[1]}&limit=1`);
+    const f = ((await r.json()).features || [])[0]; if (!f) return '';
+    const pr = f.properties || {};
+    const addr = [pr.street, pr.housenumber].filter(Boolean).join(' ');
+    return [pr.name && pr.name !== addr ? pr.name : '', addr].filter(Boolean).join(', ') || pr.district || '';
+  } catch { return ''; }
+}
+async function fillLabelIfMissing(p) {
+  if (restName) return;
+  const pk = ($('picked').textContent || '').replace('📍 ', '').trim();
+  if (pk && !/^точка (из ссылки|с карты)$/.test(pk)) return;
+  const key = $('coords').value;
+  const lbl = await reverseLabel(p);
+  if (lbl && $('coords').value === key && !restName) $('picked').textContent = '📍 ' + lbl;
+}
 function save(name, text, type) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
@@ -889,11 +924,46 @@ $('csv').onclick = () => {
 };
 function hermesRows(zone, name) {
   const t = String(Math.max(0, parseInt($('tarId').value) || 0)), m = String(Math.max(0, parseInt($('timeId').value) || 0));
+  const red = hermesCur ? hermesCur.reduced : 'False';
   const rows = [];
   for (const x of zone.hexes) if (x.status === 'ok')
     for (const k of h3.cellToChildren(x.h, 10))
-      rows.push([k, t, m, 'False', String(Math.round(h3.greatCircleDistance(zone.point, h3.cellToLatLng(k), 'm')))]);
+      rows.push([k, t, m, red, String(Math.round(h3.greatCircleDistance(zone.point, h3.cellToLatLng(k), 'm')))]);
   return rows;
+}
+// Текущая зона из Гермеса: берём тариф/время как есть и показываем зону для сравнения
+$('hermesFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const text = (await f.text()).replace(/^\ufeff/, '');
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  const head = lines[0].split(',').map(s => s.trim());
+  const ix = n => head.indexOf(n);
+  if (ix('Area Key') < 0) { $('hermesInfo').innerHTML = '<span class="neg">Это не выгрузка зоны из Гермеса: нет колонки «Area Key».</span>'; return; }
+  const cnt = {}, cells = [];
+  for (const l of lines.slice(1)) {
+    const c = l.split(','); const key = c[ix('Area Key')]; if (!key) continue;
+    cells.push(key);
+    const k = [c[ix('Delivery Tariff ID')], c[ix('Delivery Time ID')], c[ix('Is Reduced Area')]].join('|');
+    cnt[k] = (cnt[k] || 0) + 1;
+  }
+  const top = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0].split('|');
+  hermesCur = { cells, tariff: top[0], time: top[1], reduced: top[2] || 'False', mixed: Object.keys(cnt).length > 1 };
+  $('tarId').value = top[0]; $('timeId').value = top[1];
+  $('tarId').readOnly = $('timeId').readOnly = true;
+  if (last) draw(last); else renderHermesInfo();
+};
+function renderHermesInfo() {
+  if (!hermesCur) return;
+  const cur = hermesCur.cells.length * 0.0151;
+  let s = `Текущая зона: ${hermesCur.cells.length} ячеек, ~${cur.toFixed(1).replace('.', ',')} км². Тариф ${hermesCur.tariff}, время ${hermesCur.time} — останутся без изменений.`;
+  if (hermesCur.mixed) s += ' <span class="neg">В файле разные тарифы у разных ячеек — взят самый частый.</span>';
+  if (last) {
+    const newSet = new Set(); for (const x of last.hexes) if (x.status === 'ok') for (const k of h3.cellToChildren(x.h, 10)) newSet.add(k);
+    const curSet = new Set(hermesCur.cells);
+    let add = 0, rem = 0; for (const k of newSet) if (!curSet.has(k)) add++; for (const k of curSet) if (!newSet.has(k)) rem++;
+    s += `<br>Новая зона: ~${(newSet.size * 0.0151).toFixed(1).replace('.', ',')} км². Добавится <b class="pos">${(add * 0.0151).toFixed(1).replace('.', ',')} км²</b>, уберётся <b class="neg">${(rem * 0.0151).toFixed(1).replace('.', ',')} км²</b>. Текущая зона — фиолетовый пунктир на карте.`;
+  }
+  $('hermesInfo').innerHTML = s;
 }
 const HERMES_HEAD = ['Area Key', 'Delivery Tariff ID', 'Delivery Time ID', 'Is Reduced Area', 'Distance from restaurant'];
 $('hermes').onclick = () => {
