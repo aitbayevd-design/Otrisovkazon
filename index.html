@@ -76,6 +76,11 @@ h2{font-size:15px;margin:18px 0 2px}
 .mode.on{display:block}
 .lines{margin:8px 0 0;padding:0;list-style:none;font-size:13px}
 .lines li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line)}
+.sugwrap{position:relative}
+.sug{position:absolute;z-index:1000;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;background:var(--paper);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:300px;overflow:auto}
+.sug li{padding:8px 9px;border-radius:7px;cursor:pointer;font-size:14px;line-height:1.3}
+.sug li small{display:block;color:var(--ink-3);font-size:12px}
+.sug li[aria-selected="true"],.sug li:hover{background:var(--panel)}
 .pos{color:#0f8a5f}.neg{color:#cf3434}
 .loss{width:100%;font-size:13px}
 .loss td{cursor:pointer}
@@ -107,10 +112,11 @@ h2{font-size:15px;margin:18px 0 2px}
 
   <fieldset>
     <label class="t" for="coords">Где ресторан</label>
-    <input type="text" id="coords" placeholder="Координаты, например 43.2446, 76.9173" autocomplete="off">
+    <div class="sugwrap"><input type="text" id="coords" placeholder="Адрес, название, ссылка 2ГИС/Google/Яндекс или координаты" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="sug" aria-expanded="false"><ul id="sug" class="sug" role="listbox" hidden></ul></div>
+    <div class="hint" id="picked"></div>
     <input type="text" id="rest" list="restList" placeholder="или найдите ресторан из списка" autocomplete="off" style="margin-top:8px">
     <datalist id="restList"></datalist>
-    <div class="hint">Можно просто кликнуть по карте.</div>
+    <div class="hint">Можно вставить ссылку на место из 2ГИС, Google Maps или Яндекс Карт, начать писать адрес или просто кликнуть по карте.</div>
   </fieldset>
 
   <fieldset>
@@ -118,8 +124,9 @@ h2{font-size:15px;margin:18px 0 2px}
     <input type="text" id="brand" placeholder="Например Basilic" autocomplete="off">
     <div class="hint">Зона не зайдёт на территорию других филиалов этого бренда.</div>
     <label class="t" for="extra" style="margin-top:12px">Новые филиалы</label>
-    <textarea id="extra" rows="3" placeholder="Координаты филиалов, которых ещё нет в списке, по одному на строку&#10;43.2542, 76.9363"></textarea>
-    <div class="hint">Зона поделится с ними так же, как с филиалами из списка.</div>
+    <textarea id="extra" rows="3" placeholder="По одному на строку: адрес, ссылка на карту или координаты&#10;Достык 18, Астана"></textarea>
+    <div class="hint">Зона поделится с ними так же, как с филиалами из списка. Адреса и ссылки превратятся в координаты при построении.</div>
+    <ul class="lines" id="extraList"></ul>
   </fieldset>
 
   <fieldset class="row2">
@@ -170,7 +177,15 @@ h2{font-size:15px;margin:18px 0 2px}
       <button id="geo">Скачать GeoJSON</button>
       <button id="copy" class="wide">Скопировать ID ячеек зоны</button>
       <button id="mxcsv" class="wide">Скачать таблицу по часам</button>
+      <button id="allBr" class="wide" style="border-color:var(--ink);font-weight:600">Зоны всех филиалов сразу</button>
     </div>
+  </section>
+
+  <section id="multi" hidden>
+    <h2>Зоны всех филиалов</h2>
+    <p class="hint" style="margin:0 0 6px">Каждый филиал — своим цветом, территория поделена между ними.</p>
+    <table class="loss"><thead><tr><th>Филиал</th><th class="n">Ячеек</th><th class="n">км²</th></tr></thead><tbody id="multiBody"></tbody></table>
+    <div class="exp"><button id="mCsv">Скачать CSV</button><button id="mGeo">Скачать GeoJSON</button><button id="mBack" class="wide">Назад к одной зоне</button></div>
   </section>
 
   <section id="losses" hidden>
@@ -489,6 +504,99 @@ function parseCoords(s) {
   const a = parseFloat(m[1].replace(',', '.')), b = parseFloat(m[2].replace(',', '.'));
   return (Math.abs(a) <= 90 && Math.abs(b) <= 180) ? [a, b] : null;
 }
+// Координаты из ссылок 2ГИС / Google Maps / Яндекс Карт
+function parseLink(s) {
+  if (!/https?:\/\/|2gis|google|yandex|goo\.gl/i.test(s)) return null;
+  const t = decodeURIComponent(s);
+  const num = '(-?\\d{1,3}\\.\\d+)';
+  const tries = [
+    [new RegExp('!3d' + num + '!4d' + num), 'latlng'],
+    [new RegExp('@' + num + ',' + num), 'latlng'],
+    [new RegExp('[?&](?:q|query|center|destination)=' + num + ',\\s*' + num), 'latlng'],
+    [new RegExp('[?&]m=' + num + ',' + num), 'lnglat'],
+    [new RegExp('/(?:geo|firm|directions|search)/[^?#]*?/' + num + ',' + num), 'lnglat'],
+    [new RegExp('points=[^&]*?' + num + ',' + num), 'lnglat'],
+    [new RegExp('[?&](?:ll|pt|whatshere\\[point\\])=' + num + ',' + num), 'lnglat'],
+  ];
+  for (const [re, order] of tries) {
+    const m = t.match(re);
+    if (m) {
+      let a = +m[1], b = +m[2];
+      let p = order === 'latlng' ? [a, b] : [b, a];
+      if (!nearestCity(p) && nearestCity([p[1], p[0]])) p = [p[1], p[0]];
+      return p;
+    }
+  }
+  return 'short';
+}
+let sugAbort = null, sugTimer = null, sugItems = [], sugSel = -1;
+async function geocode(q, limit) {
+  const c = D.cities[cityKey];
+  if (sugAbort) sugAbort.abort();
+  sugAbort = new AbortController();
+  const out = [];
+  try {
+    const u = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=${limit || 7}&lat=${c.center[0]}&lon=${c.center[1]}`;
+    const r = await fetch(u, { signal: sugAbort.signal });
+    const j = await r.json();
+    for (const f of j.features || []) {
+      const [lng, lat] = f.geometry.coordinates, pr = f.properties || {};
+      if (!nearestCity([lat, lng])) continue;
+      const main = pr.name || [pr.street, pr.housenumber].filter(Boolean).join(' ') || q;
+      const sub = [pr.name ? [pr.street, pr.housenumber].filter(Boolean).join(' ') : '', pr.district, pr.city].filter(Boolean).join(', ');
+      out.push({ p: [lat, lng], main, sub });
+    }
+  } catch (e) { if (e.name === 'AbortError') throw e; }
+  if (!out.length && limit === 1) { // запасной поиск, только по нажатию
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=kz&limit=3&accept-language=ru&q=${encodeURIComponent(q + ', ' + c.name)}`);
+      for (const x of await r.json()) { const p = [+x.lat, +x.lon]; if (nearestCity(p)) out.push({ p, main: x.display_name.split(',')[0], sub: x.display_name.split(',').slice(1, 3).join(',') }); }
+    } catch {}
+  }
+  return out;
+}
+function hideSug() { $('sug').hidden = true; $('coords').setAttribute('aria-expanded', 'false'); sugItems = []; sugSel = -1; }
+function showSug(items) {
+  sugItems = items; sugSel = -1;
+  if (!items.length) { hideSug(); return; }
+  $('sug').innerHTML = items.map((x, i) => `<li role="option" data-i="${i}">${x.main}${x.sub ? `<small>${x.sub}</small>` : ''}</li>`).join('');
+  $('sug').hidden = false; $('coords').setAttribute('aria-expanded', 'true');
+  $('sug').querySelectorAll('li').forEach(li => li.onmousedown = e => { e.preventDefault(); pickSug(+li.dataset.i); });
+}
+function pickSug(i) {
+  const x = sugItems[i]; if (!x) return;
+  hideSug(); restName = '';
+  $('coords').value = `${x.p[0].toFixed(6)}, ${x.p[1].toFixed(6)}`;
+  $('picked').textContent = '📍 ' + x.main + (x.sub ? ', ' + x.sub : '');
+  run();
+}
+$('coords').addEventListener('input', () => {
+  const v = $('coords').value.trim();
+  clearTimeout(sugTimer); $('picked').textContent = '';
+  if (v.length < 3 || parseCoords(v) || parseLink(v)) { hideSug(); return; }
+  sugTimer = setTimeout(async () => { try { showSug(await geocode(v, 7)); } catch {} }, 450);
+});
+$('coords').addEventListener('keydown', e => {
+  if ($('sug').hidden) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault(); sugSel = (sugSel + (e.key === 'ArrowDown' ? 1 : -1) + sugItems.length) % sugItems.length;
+    $('sug').querySelectorAll('li').forEach((li, i) => li.setAttribute('aria-selected', i === sugSel));
+  } else if (e.key === 'Enter' && sugSel >= 0) { e.preventDefault(); e.stopImmediatePropagation(); pickSug(sugSel); }
+  else if (e.key === 'Escape') hideSug();
+});
+$('coords').addEventListener('blur', () => setTimeout(hideSug, 150));
+
+// Превращает строку (координаты / ссылка / адрес) в точку
+async function resolve(text) {
+  const c = parseCoords(text.replace(/\s+—.*$/, ''));
+  const l = parseLink(text);
+  if (l && l !== 'short') return { p: l, label: '' };
+  if (l === 'short') return { err: 'короткая ссылка: откройте её в браузере и скопируйте полную ссылку из адресной строки' };
+  if (c) return { p: c, label: '' };
+  const g = await geocode(text, 1);
+  return g.length ? { p: g[0].p, label: g[0].main + (g[0].sub ? ', ' + g[0].sub : '') } : { err: 'адрес не найден, уточните или вставьте ссылку на карту' };
+}
+
 function nearestCity(p) {
   let best = null, bd = Infinity;
   for (const [k, c] of Object.entries(D.cities)) {
@@ -503,12 +611,39 @@ $('rest').addEventListener('change', () => {
   if (!r) return;
   $('coords').value = `${r[1]}, ${r[2]}`;
   $('brand').value = r[0].split(/\s+/)[0];
-  restName = r[0];
+  restName = r[0]; $('picked').textContent = '📍 ' + r[0];
   run();
 });
 ['coords', 'brand', 'extra', 'maxKm', 'limit'].forEach(id => $(id).addEventListener('input', () => $('err').textContent = ''));
-$('coords').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
-$('go').onclick = () => run();
+$('coords').addEventListener('keydown', e => { if (e.key === 'Enter' && $('sug').hidden) go(); });
+$('go').onclick = () => go();
+async function go() {
+  hideSug();
+  const v = $('coords').value.trim();
+  if (!v) { $('err').textContent = 'Укажите адрес, ссылку на карту или координаты ресторана.'; return; }
+  if (!parseCoords(v) || parseLink(v)) {
+    $('err').textContent = 'Ищу адрес…';
+    let r; try { r = await resolve(v); } catch { return; }
+    if (r.err) { $('err').textContent = 'Не получилось найти точку: ' + r.err + '.'; return; }
+    $('err').textContent = ''; restName = '';
+    $('coords').value = `${r.p[0].toFixed(6)}, ${r.p[1].toFixed(6)}`;
+    $('picked').textContent = r.label ? '📍 ' + r.label : '📍 точка из ссылки';
+  }
+  await resolveExtra();
+  run();
+}
+async function resolveExtra() {
+  const lines = $('extra').value.split('\n'), out = [], notes = [];
+  for (const line of lines) {
+    const t = line.trim(); if (!t) continue;
+    if (parseCoords(t) && !parseLink(t)) { out.push(t); continue; }
+    let r; try { r = await resolve(t); } catch { r = { err: 'ошибка поиска' }; }
+    if (r.err) { out.push(t); notes.push(`<li><span class="neg">«${t.slice(0, 40)}»: ${r.err}</span></li>`); }
+    else { out.push(`${r.p[0].toFixed(6)}, ${r.p[1].toFixed(6)}${r.label ? ' — ' + r.label : ''}`); }
+  }
+  $('extra').value = out.join('\n');
+  $('extraList').innerHTML = notes.join('');
+}
 $('coords').addEventListener('input', () => { restName = ''; });
 function setMode(m) {
   mode = mode === m ? null : m;
@@ -547,7 +682,7 @@ $('resetEdits').onclick = () => { manual = { add: new Set(), remove: new Set() }
 map.on('click', e => {
   if (mode === 'line') { draft.push([e.latlng.lat, e.latlng.lng]); drawDraft(); return; }
   if (mode === 'edit') return;
-  restName = ''; $('coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; run(); });
+  restName = ''; $('picked').textContent = '📍 точка с карты'; $('coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; run(); });
 
 function run(keepHours) {
   const p = parseCoords($('coords').value);
@@ -560,15 +695,17 @@ function run(keepHours) {
   const extra = [];
   for (const [i, line] of $('extra').value.split('\n').entries()) {
     if (!line.trim()) continue;
-    const q = parseCoords(line);
-    if (!q) { $('err').textContent = `Не получилось прочитать координаты филиала в строке ${i + 1}: «${line.trim()}».`; return; }
-    extra.push(['Новый филиал ' + (extra.length + 1), q[0], q[1]]);
+    const q = parseCoords(line.replace(/\s+—.*$/, ''));
+    if (!q) { $('err').textContent = `Строка ${i + 1} в «Новых филиалах» ещё не найдена: «${line.trim().slice(0, 40)}». Нажмите «Построить зону», чтобы найти адрес.`; return; }
+    const lbl = (line.split(' — ')[1] || '').trim();
+    extra.push([lbl || 'Новый филиал ' + (extra.length + 1), q[0], q[1]]);
   }
   if (!keepHours) loadEdits();
   const opts = { lat: p[0], lng: p[1], brand: $('brand').value, maxKm, limit, extraBranches: extra, customLines: customLines[cityKey] || [], manual };
   last = Zones.build(D.cities[cityKey], Object.assign({ hour }, opts));
   if (Zones.byHour && D.hourOrder && (!keepHours || !hourRows)) hourRows = Zones.byHour(D.cities[cityKey], opts, D.hourOrder);
   eco = Zones.economy ? Zones.economy(D.cities[cityKey], Object.assign({ restName }, opts), last.rings) : null;
+  multi = null; $('multi').hidden = true;
   draw(last);
   const shareLines = (customLines[cityKey] || []).map(l => l.allowKm + '@' + l.pts.map(q => q[0] + ',' + q[1]).join(';')).join('|');
   location.hash = new URLSearchParams({ sl: shareLines, ma: [...manual.add].join('.'), mr: [...manual.remove].join('.'), lat: p[0].toFixed(6), lng: p[1].toFixed(6), brand: $('brand').value, km: maxKm, min: limit, h: hour == null ? '' : hour, r: restName, extra: extra.map(e => e[1].toFixed(6) + ',' + e[2].toFixed(6)).join(';') }).toString();
@@ -672,6 +809,53 @@ $('mxcsv').onclick = () => {
   last.rings.forEach((ring, i) => rows.push([`${ring.from}-${ring.to}`].concat(hourRows.map(r => r.rings[i].toFixed(1).replace('.', ',')))));
   rows.push(['ячеек_в_зоне'].concat(hourRows.map(r => r.cells)));
   save(fileName('csv').replace('zona_', 'zona_po_chasam_'), '\ufeff' + rows.map(r => r.join(';')).join('\n'), 'text/csv');
+};
+
+const PAL = ['#3b73d9', '#e8692c', '#0f8a5f', '#a23bd9', '#d9a400', '#cf3434', '#1fa3b8', '#7a5a2e', '#d93b8f', '#4b5466'];
+let multi = null;
+$('allBr').onclick = () => {
+  if (!last) return;
+  const c = D.cities[cityKey];
+  const pk = $('picked').textContent.replace('📍 ', '');
+  const pts = [[restName || (pk && !/^точка (из ссылки|с карты)$/.test(pk) ? pk : 'Эта точка'), last.point[0], last.point[1]]].concat(last.branches);
+  if (pts.length < 2) { $('err').textContent = 'Нет других филиалов: впишите бренд или добавьте точки в «Новые филиалы».'; return; }
+  const base = { maxKm: last.maxKm, limit: last.limit, hour, customLines: customLines[cityKey] || [] };
+  multi = pts.map((b, i) => {
+    const others = pts.filter((_, j) => j !== i);
+    const z = Zones.build(c, Object.assign({ lat: b[1], lng: b[2], brand: '', extraBranches: others }, base));
+    return { name: b[0], p: [b[1], b[2]], z, color: PAL[i % PAL.length] };
+  });
+  drawMulti();
+};
+function drawMulti() {
+  if (layer) map.removeLayer(layer);
+  layer = L.layerGroup().addTo(map);
+  for (const m of multi) {
+    for (const x of m.z.hexes) if (x.status === 'ok')
+      L.polygon(h3.cellToBoundary(x.h), { color: m.color, weight: 1, fillColor: m.color, fillOpacity: .38 }).bindTooltip(`${m.name}<br>${m.z.rings[x.r].from}–${m.z.rings[x.r].to} км · ~${Math.round(x.est)} мин`).addTo(layer);
+    for (const poly of m.z.outline) L.polygon(poly.map(r => r.map(([lng, lat]) => [lat, lng])), { color: m.color, weight: 3, fill: false }).addTo(layer);
+    L.marker(m.p, { icon: L.divIcon({ className: '', html: `<div class="pin" style="background:${m.color}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] }) }).bindTooltip(m.name).addTo(layer);
+  }
+  map.fitBounds(L.featureGroup(layer.getLayers()).getBounds(), { padding: [24, 24] });
+  $('multiBody').innerHTML = multi.map(m => { const n = m.z.counts.ok || 0; return `<tr><td><span class="sw" style="background:${m.color}"></span>${m.name}</td><td class="n">${n}</td><td class="n">${(n * 0.105).toFixed(1).replace('.', ',')}</td></tr>`; }).join('');
+  $('multi').hidden = false; $('result').hidden = true;
+  document.querySelector('aside').scrollTo({ top: $('multi').offsetTop - 20, behavior: 'smooth' });
+}
+$('mBack').onclick = () => { multi = null; $('multi').hidden = true; if (last) draw(last); };
+$('mCsv').onclick = () => {
+  if (!multi) return;
+  const rows = [['филиал', 'h3_index_res9', 'кольцо_км', 'среднее_кольца_мин', 'оценка_ячейки_мин']];
+  for (const m of multi) for (const x of m.z.hexes) if (x.status === 'ok') { const r = m.z.rings[x.r]; rows.push([m.name, x.h, `${r.from}-${r.to}`, r.avg.toFixed(1), Math.round(x.est)]); }
+  save(`zony_filialov_${D.cities[cityKey].name}.csv`, '\ufeff' + rows.map(r => r.join(';')).join('\n'), 'text/csv');
+};
+$('mGeo').onclick = () => {
+  if (!multi) return;
+  const feats = [];
+  for (const m of multi) {
+    for (const x of m.z.hexes) if (x.status === 'ok') feats.push({ type: 'Feature', properties: { branch: m.name, h3: x.h, color: m.color }, geometry: { type: 'Polygon', coordinates: [h3.cellToBoundary(x.h, true)] } });
+    for (const poly of m.z.outline) feats.push({ type: 'Feature', properties: { branch: m.name, kind: 'zone_outline' }, geometry: { type: 'Polygon', coordinates: poly } });
+  }
+  save(`zony_filialov_${D.cities[cityKey].name}.geojson`, JSON.stringify({ type: 'FeatureCollection', features: feats }), 'application/geo+json');
 };
 
 function fileName(ext) { const p = last.point; return `zona_${D.cities[cityKey].name}_${p[0].toFixed(4)}_${p[1].toFixed(4)}${last.hour == null ? '' : '_' + String(last.hour).padStart(2, '0') + 'h'}.${ext}`; }
